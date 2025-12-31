@@ -182,8 +182,7 @@ if not df.empty:
     st.dataframe(best_lifts, hide_index=True, use_container_width=True)
 
     # --- TABS FOR DETAILS ---
-    tab1, tab2, tab3, tab4 = st.tabs(["💪 Strength", "📊 Volume", "🧠 Analytics", "📔 Notes"])
-
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["💪 Strength", "📊 Volume", "🧠 Analytics", "📔 Notes", "⚙️ Manage"]) 
     with tab1: # Strength
         target_exercise = st.selectbox("Select Exercise:", df["Exercise"].unique())
         strength_data = df[df["Exercise"] == target_exercise]
@@ -203,6 +202,42 @@ if not df.empty:
             st.dataframe(notes_df, hide_index=True, use_container_width=True)
         else:
             st.warning("⚠️ 'Notes' column missing in Google Sheet. Add it to header H1.")
+    with tab5: # Manage / Delete
+        st.subheader("🛠️ Manage Data")
+        
+        # 1. Show Data with Row Numbers
+        # We create a copy so we don't mess up the main dataframe
+        manage_df = df.copy() 
+        
+        # Google Sheets rows start at 1 (Headers), so data starts at 2
+        # We calculate the row number: Index + 2 
+        manage_df["Sheet_Row_Number"] = range(2, 2 + len(manage_df))
+        
+        # Show the table so you can find the Row Number
+        st.dataframe(
+            manage_df[["Sheet_Row_Number", "Date", "Exercise", "Weight_kg", "Notes"]].sort_values("Sheet_Row_Number", ascending=False), 
+            hide_index=True, 
+            use_container_width=True
+        )
+
+        # 2. Delete Form
+        st.warning("⚠️ Deleting is permanent!")
+        col_del_1, col_del_2 = st.columns([1, 2])
+        
+        with col_del_1:
+            row_to_delete = st.number_input("Row Number to Delete", min_value=2, step=1)
+        
+        with col_del_2:
+            st.write("##") # Spacer
+            if st.button("🗑️ Delete Entry"):
+                try:
+                    sheet.delete_rows(int(row_to_delete))
+                    st.success(f"✅ Deleted Row {row_to_delete}!")
+                    import time
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error: {e}")
 
 else:
     st.info(f"Welcome {current_user}! Start logging above.")
