@@ -30,13 +30,19 @@ CATEGORY_MAP = {
 
 # --- GOOGLE SHEETS CONNECTION (Modern Way) ---
 def connect_to_sheet():
-    # We use the raw string r"..." to fix path issues
-    # This method handles SSL certificates automatically
-    filename = r"D:\data analyst\7-Project\service_account.json"
+    # 1. CHECK FOR CLOUD SECRETS FIRST
+    # If the app is running on Streamlit Cloud, it will find the secrets there.
+    if "gcp_service_account" in st.secrets:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        client = gspread.service_account_from_dict(creds_dict)
     
-    # Connect directly using gspread
-    client = gspread.service_account(filename=filename)
-    
+    # 2. IF NO SECRETS, LOOK FOR LOCAL FILE
+    # This runs when you are on your laptop
+    else:
+        # Use the raw string r"..." for your local path
+        filename = r"D:\data analyst\7-Project\service_account.json"
+        client = gspread.service_account(filename=filename)
+
     # Open the sheet
     sheet = client.open(GOOGLE_SHEET_NAME).sheet1
     return sheet
