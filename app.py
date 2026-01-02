@@ -62,6 +62,21 @@ CATEGORY_MAP = {
     "Partial Curl":"Bicep" 
 }
 
+# --- EXERCISE LISTS (The Complete Database) ---
+
+# 1. Friends
+exercises_rahil = ["Squat", "Deadlift", "Leg Press", "Calf Raises"]
+exercises_azaan = ["Bicep Curls", "Hammer Curls", "Lat Pulldowns", "Rows"]
+
+# 2. Kaisar's Standard Days
+exercises_upper = ["Smith Bench", "Row", "Cable Chest Flies", "Narrow Pulldown", "Lateral Raises", "JM Press", "Reverse Pec Dec", "Tricep Extension", "Shoulder Press", "Incline Dumbbell Press"]
+exercises_abs = ["Crunches", "Knee Raises"]
+
+# 3. Kaisar's Arm Wrestling Days
+exercises_tue = ["Index Knuckle Pronation", "Heavy Wrist Wrench", "Low Multi-Spinner", "Finger Containment (Static)", "Volume Side Pressure", "Volume Rising", "Volume Pronation"]
+exercises_thu = ["Static Back Pressure", "Static Pronation", "Static Cupping"]
+exercises_sat = ["Single-Loop Back Pressure", "Heavy Pronation Lift", "Heavy Riser", "High Cable Side Pressure", "Partial Curl", "Volume Cupping"]
+
 # --- GOOGLE SHEETS CONNECTION (Modern Way) ---
 def connect_to_sheet():
     # 1. Find the file on your laptop
@@ -101,31 +116,45 @@ with st.sidebar:
 # --- SECTION 1: INPUT FORM ---
 st.header(f"Log a Set for {current_user}")
 
-day_filter = st.radio(
-    "⚡ Quick Select Day:", 
-    ["All Exercises", "Tue (Heavy/Vol)", "Thu (Statics)", "Sat (Table Power)"], 
-    horizontal=True
-)
+# Updated buttons to match your real schedule
+# --- SECTION 1: INPUT FORM ---
+st.header(f"Log a Set for {current_user}")
 
+# ✅ ONLY Show Day Filters for Kaisar
+if current_user == "Kaisar":
+    day_filter = st.radio(
+        "⚡ Quick Select Day:", 
+        ["All Exercises", "Tue (Heavy/Vol)", "Thu (Statics)", "Sat (Table Power)", "Upper Body", "Abs"], 
+        horizontal=True
+    )
+else:
+    # For Rahil, Azaan, and Friend, we don't need filters yet.
+    # We just set this variable silently so the code doesn't crash.
+    day_filter = "All Exercises"
+
+    
 with st.form("workout_form", clear_on_submit=True):
     col1, col2 = st.columns(2)
     with col1:
         d = st.date_input("Date", date.today())
-        exercises_tue = ["Index Knuckle Pronation", "Heavy Wrist Wrench", "Low Multi-Spinner", "Finger Containment (Static)", "Volume Side Pressure", "Volume Rising", "Volume Pronation"]
-        exercises_thu = ["Static Back Pressure", "Static Pronation", "Static Cupping"]
-        exercises_sat = ["Single-Loop Back Pressure", "Heavy Pronation Lift", "Heavy Riser", "High Cable Side Pressure", "Partial Curl", "Volume Cupping"]
-
-        if current_user == "Friend":
-            exercise_options = ["Bicep Curl", "Bench Press", "Squat", "Deadlift"]
-        elif day_filter == "Tue (Heavy/Vol)":
-            exercise_options = exercises_tue
-        elif day_filter == "Thu (Statics)":
-            exercise_options = exercises_thu
-        elif day_filter == "Sat (Table Power)":
-            exercise_options = exercises_sat
-        else:
-            exercise_options = exercises_tue + exercises_thu + exercises_sat
-            
+        if current_user == "Rahil":
+            exercise_options = exercises_rahil
+        elif current_user == "Azaan":
+            exercise_options = exercises_azaan
+        elif current_user == "Kaisar":
+            if day_filter == "Tue (Heavy/Vol)":
+                exercise_options = exercises_tue
+            elif day_filter == "Thu (Statics)":
+                exercise_options = exercises_thu
+            elif day_filter == "Sat (Table Power)":
+                exercise_options = exercises_sat
+            elif day_filter == "Upper Body":
+                exercise_options = exercises_upper
+            elif day_filter == "Abs":
+                exercise_options = exercises_abs
+            else:
+                exercise_options = exercises_tue + exercises_thu + exercises_sat + exercises_upper + exercises_abs
+                
         exercise = st.selectbox("Exercise", exercise_options)
         Bodyweight =st.number_input("Bodyweight (kg)", min_value=0.0, step=0.5, value=70.0)
         
