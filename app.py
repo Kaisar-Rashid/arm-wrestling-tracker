@@ -113,8 +113,6 @@ with st.sidebar:
         st.session_state["logged_in"] = False
         st.rerun()
 
-# --- SECTION 1: INPUT FORM ---
-st.header(f"Log a Set for {current_user}")
 
 # Updated buttons to match your real schedule
 # --- SECTION 1: INPUT FORM ---
