@@ -31,6 +31,7 @@ CATEGORY_MAP = {
 
 # --- GOOGLE SHEETS CONNECTION (Modern Way) ---
 def connect_to_sheet():
+    # 1. Find the file on your laptop
     current_dir = os.path.dirname(os.path.abspath(__file__))
     json_file_path = os.path.join(current_dir, "service_account.json")
 
@@ -84,6 +85,7 @@ with st.form("workout_form", clear_on_submit=True):
             exercise_options = exercises_tue + exercises_thu + exercises_sat
             
         exercise = st.selectbox("Exercise", exercise_options)
+        Bodyweight =st.number_input("Bodyweight (kg)", min_value=0.0, step=0.5, value=70.0)
         
     with col2:
         weight = st.number_input("Weight (kg)", min_value=0.0, step=0.5)
@@ -98,7 +100,7 @@ with st.form("workout_form", clear_on_submit=True):
         date_str = d.strftime("%Y-%m-%d")
         try:
             sheet = connect_to_sheet()
-            new_row = [date_str, exercise, weight, sets, reps, rpe, current_user, notes]
+            new_row = [date_str, exercise, weight, sets, reps, rpe, current_user, notes,Bodyweight]
             sheet.append_row(new_row)
             st.success(f"✅ Added: {exercise} ({weight}kg)")
             import time
@@ -115,7 +117,7 @@ try:
     raw_data = sheet.get_all_records()
     df = pd.DataFrame(raw_data)
     if df.empty:
-        df = pd.DataFrame(columns=["Date", "Exercise", "Weight_kg", "Sets", "Reps", "RPE", "User", "Notes"])
+        df = pd.DataFrame(columns=["Date", "Exercise", "Weight_kg", "Sets", "Reps", "RPE", "User", "Notes","Bodyweight"])
 except Exception as e:
     st.error(f"❌ Error connecting to Google Sheets: {e}")
     st.stop()
@@ -132,6 +134,7 @@ if not df.empty:
     df["Weight_kg"] = pd.to_numeric(df["Weight_kg"], errors='coerce').fillna(0)
     df["Sets"] = pd.to_numeric(df["Sets"], errors='coerce').fillna(0)
     df["Reps"] = pd.to_numeric(df["Reps"], errors='coerce').fillna(0)
+    df["Bodyweight"] = pd.to_numeric(df["Bodyweight"],errors='coerce').fillna(0)
     df["Volume_kg"] = df["Sets"] * df["Reps"] * df["Weight_kg"]
     df["e1RM"] = df["Weight_kg"] * (1 + (df["Reps"] / 30))
 
@@ -158,7 +161,8 @@ if not df.empty:
         st.subheader("🛠️ Manage Data")
         manage_df = df.copy() 
         manage_df["Sheet_Row_Number"] = range(2, 2 + len(manage_df))
-        st.dataframe(manage_df[["Sheet_Row_Number", "Date", "Exercise", "Weight_kg", "Notes"]].sort_values("Sheet_Row_Number", ascending=False), hide_index=True, use_container_width=True)
+        st.dataframe(manage_df[["Sheet_Row_Number", "Display_Date", "Exercise", "Weight_kg","Bodyweight", "Notes"]].sort_values("Sheet_Row_Number", ascending=False), 
+        hide_index=True, use_container_width=True)
         st.warning("⚠️ Deleting is permanent!")
         col_del_1, col_del_2 = st.columns([1, 2])
         with col_del_1:
