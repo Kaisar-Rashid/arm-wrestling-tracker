@@ -5,6 +5,39 @@ from datetime import date, datetime
 import gspread
 import os
 
+
+# --- AUTHENTICATION LOGIC ---
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+    st.session_state["username"] = None
+
+def check_login(username, password):
+    if "passwords" not in st.secrets:
+        st.error("❌ Error: 'secrets.toml' file is missing or empty!")
+        return
+
+    if username in st.secrets["passwords"]:
+        if st.secrets["passwords"][username] == password:
+            st.session_state["logged_in"] = True
+            st.session_state["username"] = username
+            st.success("Logged in!")
+            st.rerun()
+        else:
+            st.error("❌ Incorrect Password")
+    else:
+        st.error("❌ User not found")
+
+# --- THE GATEKEEPER ---
+if not st.session_state["logged_in"]:
+    st.title("🔒 Arm Wrestling Tracker")
+    user_input = st.text_input("Username")
+    pass_input = st.text_input("Password", type="password")
+    
+    if st.button("Login"):
+        check_login(user_input, pass_input)
+    
+    st.stop()
+
 # --- CONFIGURATION ---
 GOOGLE_SHEET_NAME = "Arm Wrestling Data"
 
@@ -52,9 +85,18 @@ st.set_page_config(page_title="Arm Wrestling Tracker", page_icon="💪", layout=
 st.title("Arm Wrestling Training Log")
 
 # --- SIDEBAR: USER SELECTION ---
+# --- SIDEBAR: USER INFO ---
 with st.sidebar:
     st.header("👤 Who is training?")
-    current_user = st.radio("Select User:", ["Kaisar", "Friend"])    
+    
+    # ✅ 1. LOCK THE USER to the login name
+    current_user = st.session_state["username"]
+    st.info(f"Logged in as: **{current_user}**")
+
+    # ✅ 2. LOGOUT BUTTON
+    if st.button("Log Out"):
+        st.session_state["logged_in"] = False
+        st.rerun()
 
 # --- SECTION 1: INPUT FORM ---
 st.header(f"Log a Set for {current_user}")
@@ -142,7 +184,22 @@ if not df.empty:
     best_lifts = df.groupby("Exercise")["Weight_kg"].max().reset_index().sort_values(by="Weight_kg", ascending=False)
     st.dataframe(best_lifts, hide_index=True, use_container_width=True)
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["💪 Strength", "📊 Volume", "🧠 Analytics", "📔 Notes", "⚙️ Manage"]) 
+    # 1. Define the tabs everyone sees
+    tabs_list = ["➕ Log Workout", "📊 Progress", "📅 History", "📉 RPE", "⚖️ Bodyweight"]
+
+    # 2. If it is YOU (Kaisar), add the Admin tab
+    if current_user == "Kaisar":
+        tabs_list.append("🛠️ Manage Data")
+
+    # 3. Create the tabs
+    all_tabs = st.tabs(tabs_list)
+
+    # 4. Unpack them (This is a bit tricky, follow closely)
+    tab1, tab2, tab3, tab4, tab6 = all_tabs[0], all_tabs[1], all_tabs[2], all_tabs[3], all_tabs[4]
+
+    # Only define tab5 if it exists
+    if current_user == "Kaisar":
+        tab5 = all_tabs[5]
     with tab1:
         target_exercise = st.selectbox("Select Exercise:", df["Exercise"].unique())
         strength_data = df[df["Exercise"] == target_exercise]
@@ -157,26 +214,27 @@ if not df.empty:
         if "Notes" in df.columns:
             notes_df = df[df["Notes"] != ""][["Display_Date", "Exercise", "Weight_kg", "Notes"]]
             st.dataframe(notes_df, hide_index=True, use_container_width=True)
-    with tab5:
-        st.subheader("🛠️ Manage Data")
-        manage_df = df.copy() 
-        manage_df["Sheet_Row_Number"] = range(2, 2 + len(manage_df))
-        st.dataframe(manage_df[["Sheet_Row_Number", "Display_Date", "Exercise", "Weight_kg","Bodyweight", "Notes"]].sort_values("Sheet_Row_Number", ascending=False), 
-        hide_index=True, use_container_width=True)
-        st.warning("⚠️ Deleting is permanent!")
-        col_del_1, col_del_2 = st.columns([1, 2])
-        with col_del_1:
-            row_to_delete = st.number_input("Row Number to Delete", min_value=2, step=1)
-        with col_del_2:
-            st.write("##")
-            if st.button("🗑️ Delete Entry"):
-                try:
-                    sheet.delete_rows(int(row_to_delete))
-                    st.success(f"✅ Deleted Row {row_to_delete}!")
-                    import time
-                    time.sleep(1)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Error: {e}")
+    if current_user == "Kaisar":
+        with tab5:
+            st.subheader("🛠️ Manage Data")
+            manage_df = df.copy() 
+            manage_df["Sheet_Row_Number"] = range(2, 2 + len(manage_df))
+            st.dataframe(manage_df[["Sheet_Row_Number", "Display_Date", "Exercise", "Weight_kg","Bodyweight", "Notes"]].sort_values("Sheet_Row_Number", ascending=False), 
+            hide_index=True, use_container_width=True)
+            st.warning("⚠️ Deleting is permanent!")
+            col_del_1, col_del_2 = st.columns([1, 2])
+            with col_del_1:
+                row_to_delete = st.number_input("Row Number to Delete", min_value=2, step=1)
+            with col_del_2:
+                st.write("##")
+                if st.button("🗑️ Delete Entry"):
+                    try:
+                        sheet.delete_rows(int(row_to_delete))
+                        st.success(f"✅ Deleted Row {row_to_delete}!")
+                        import time
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error: {e}")
 else:
     st.info(f"Welcome {current_user}! Start logging above.")
