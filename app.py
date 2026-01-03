@@ -278,7 +278,7 @@ if not df.empty:
     st.dataframe(best_lifts, hide_index=True, use_container_width=True)
 
     # Tabs
-    tabs_list = ["➕ Log Workout", "📊 Progress", "📅 History", "📉 RPE", "⚖️ Bodyweight"]
+    tabs_list = ["➕ Log Workout", "📊 Progress", "📅 History", "📉 Notes", "⚖️ Bodyweight"]
     if current_user == "Kaisar":
         tabs_list.append("🛠️ Manage Data")
 
@@ -311,28 +311,46 @@ if not df.empty:
             
     # Bodyweight Tab
     with tab6: 
-         st.line_chart(df.groupby("Display_Date")["Bodyweight"].mean())
+        st.line_chart(df.groupby("Display_Date")["Bodyweight"].mean())
 
     if current_user == "Kaisar":
         with tab5:
             st.subheader("🛠️ Manage Data")
-            manage_df = df.copy() 
-            manage_df["Sheet_Row_Number"] = range(2, 2 + len(manage_df))
-            st.dataframe(manage_df[["Sheet_Row_Number", "Display_Date", "Exercise", "Weight_kg","Bodyweight", "Notes"]].sort_values("Sheet_Row_Number", ascending=False), 
-            hide_index=True, use_container_width=True)
+            
+            # 1. Show the data with the ID column
+            # We sort by ID descending so the newest stuff is at the top
+            manage_df = df.copy().sort_values("id", ascending=False)
+            
+            # Display it so you can see the IDs
+            st.dataframe(
+                manage_df[["id", "Date", "Exercise", "Weight_kg", "Bodyweight", "Notes"]], 
+                hide_index=True, 
+                use_container_width=True
+            )
+            
             st.warning("⚠️ Deleting is permanent!")
+            
             col_del_1, col_del_2 = st.columns([1, 2])
             with col_del_1:
-                row_to_delete = st.number_input("Row Number to Delete", min_value=2, step=1)
+                # 2. Ask for the ID (Unique Ticket Number)
+                id_to_delete = st.number_input("Enter ID to Delete", min_value=1, step=1)
+            
             with col_del_2:
-                st.write("##")
+                st.write("##") # Spacer
                 if st.button("🗑️ Delete Entry"):
                     try:
-                        sheet.delete_rows(int(row_to_delete))
-                        st.success(f"✅ Deleted Row {row_to_delete}!")
+                        # 3. Connect to SQL and execute the Delete Order
+                        engine = get_engine()
+                        with engine.connect() as conn:
+                            # We use :id to safely pass the number
+                            conn.execute(text("DELETE FROM workouts WHERE id = :id"), {"id": id_to_delete})
+                            conn.commit()
+                        
+                        st.success(f"✅ Deleted ID {id_to_delete}!")
                         time.sleep(1)
                         st.rerun()
+                        
                     except Exception as e:
-                        st.error(f"❌ Error: {e}")
+                        st.error(f"❌ Error deleting: {e}")
 else:
     st.info(f"Welcome {current_user}! Start logging above.")
