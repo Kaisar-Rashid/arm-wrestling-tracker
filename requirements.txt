@@ -3,4 +3,4 @@ streamlit
 pandas
 plotly
 gspread
-
+extra-streamlit-components

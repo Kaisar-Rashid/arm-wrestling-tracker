@@ -1,16 +1,41 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import date, datetime
-import gspread
+from sqlalchemy import create_engine, text
+from datetime import date, datetime, timedelta
+import extra_streamlit_components as stx
 import os
+import time
 
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="Arm Wrestling Tracker", page_icon="💪", layout="wide")
 
-# --- AUTHENTICATION LOGIC ---
+# --- AUTHENTICATION & COOKIE SETUP ---
+def get_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_manager()
+
+# Initialize Session State
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["username"] = None
 
+# --- 1. AUTO-LOGIN (CHECK COOKIE) ---
+# We wait a split second for the cookie manager to load
+time.sleep(0.1) 
+cookie_user = cookie_manager.get(cookie="arm_wrestling_user")
+
+if not st.session_state["logged_in"] and cookie_user:
+    # Validate the cookie against our secrets
+    if "passwords" in st.secrets and cookie_user in st.secrets["passwords"]:
+        st.session_state["logged_in"] = True
+        st.session_state["username"] = cookie_user
+        st.success(f"Welcome back, {cookie_user}!")
+        time.sleep(0.5) # Brief pause to show message
+        st.rerun()
+
+# --- 2. MANUAL LOGIN FUNCTION ---
 def check_login(username, password):
     if "passwords" not in st.secrets:
         st.error("❌ Error: 'secrets.toml' file is missing or empty!")
@@ -20,23 +45,38 @@ def check_login(username, password):
         if st.secrets["passwords"][username] == password:
             st.session_state["logged_in"] = True
             st.session_state["username"] = username
+            
+            # 🍪 SAVE THE COOKIE (Expires in 30 days)
+            expires = datetime.now() + timedelta(days=30)
+            cookie_manager.set("arm_wrestling_user", username, expires_at=expires)
+            
             st.success("Logged in!")
+            time.sleep(0.5)
             st.rerun()
         else:
             st.error("❌ Incorrect Password")
     else:
         st.error("❌ User not found")
 
-# --- THE GATEKEEPER ---
+# --- 3. THE GATEKEEPER (LOGIN SCREEN) ---
 if not st.session_state["logged_in"]:
     st.title("🔒 Arm Wrestling Tracker")
-    user_input = st.text_input("Username")
-    pass_input = st.text_input("Password", type="password")
     
-    if st.button("Login"):
-        check_login(user_input, pass_input)
+    with st.form("login_form"):
+        user_input = st.text_input("Username")
+        pass_input = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login")
+        
+        if submitted:
+            check_login(user_input, pass_input)
     
-    st.stop()
+    st.stop() # 🛑 APP STOPS HERE IF NOT LOGGED IN
+
+# =========================================================
+#  ✅ MAIN APP STARTS HERE (Only runs if logged in)
+# =========================================================
+
+st.title("Arm Wrestling Training Log")
 
 # --- CONFIGURATION ---
 GOOGLE_SHEET_NAME = "Arm Wrestling Data"
@@ -62,8 +102,7 @@ CATEGORY_MAP = {
     "Partial Curl":"Bicep" 
 }
 
-# --- EXERCISE LISTS (The Complete Database) ---
-
+# --- EXERCISE LISTS ---
 # 1. Friends
 exercises_rahil = ["Squat", "Deadlift", "Leg Press", "Calf Raises"]
 exercises_azaan = ["Bicep Curls", "Hammer Curls", "Lat Pulldowns", "Rows"]
@@ -77,48 +116,37 @@ exercises_tue = ["Index Knuckle Pronation", "Heavy Wrist Wrench", "Low Multi-Spi
 exercises_thu = ["Static Back Pressure", "Static Pronation", "Static Cupping"]
 exercises_sat = ["Single-Loop Back Pressure", "Heavy Pronation Lift", "Heavy Riser", "High Cable Side Pressure", "Partial Curl", "Volume Cupping"]
 
-# --- GOOGLE SHEETS CONNECTION (Modern Way) ---
-def connect_to_sheet():
-    # 1. Find the file on your laptop
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    json_file_path = os.path.join(current_dir, "service_account.json")
+# --- GOOGLE SHEETS CONNECTION ---
 
-    if os.path.exists(json_file_path):
-        client = gspread.service_account(filename=json_file_path)
-    else:
-        if "gcp_service_account" in st.secrets:
-            creds_dict = dict(st.secrets["gcp_service_account"])
-            client = gspread.service_account_from_dict(creds_dict)
-        else:
-            st.error("Could not find 'service_account.json' locally, and no Secrets found.")
-            st.stop()
+# --- DATABASE CONNECTION ---
+def get_engine():
+    try:
+        db_url = st.secrets["connections"]["supabase"]["url"]
+        return create_engine(db_url)
+    except Exception as e:
+        st.error(f"❌ Database Connection Error: {e}")
+        st.stop()
 
-    sheet = client.open("Arm Wrestling Data").sheet1 
-    return sheet
 
-st.set_page_config(page_title="Arm Wrestling Tracker", page_icon="💪", layout="wide")
-st.title("Arm Wrestling Training Log")
-
-# --- SIDEBAR: USER SELECTION ---
 # --- SIDEBAR: USER INFO ---
 with st.sidebar:
     st.header("👤 Who is training?")
     
-    # ✅ 1. LOCK THE USER to the login name
+    # LOCK THE USER to the login name
     current_user = st.session_state["username"]
     st.info(f"Logged in as: **{current_user}**")
 
-    # ✅ 2. LOGOUT BUTTON
+    # LOGOUT BUTTON
     if st.button("Log Out"):
+        cookie_manager.delete("arm_wrestling_user")
         st.session_state["logged_in"] = False
+        st.session_state["username"] = None
         st.rerun()
 
-
-# Updated buttons to match your real schedule
 # --- SECTION 1: INPUT FORM ---
 st.header(f"Log a Set for {current_user}")
 
-# ✅ ONLY Show Day Filters for Kaisar
+# ONLY Show Day Filters for Kaisar
 if current_user == "Kaisar":
     day_filter = st.radio(
         "⚡ Quick Select Day:", 
@@ -126,15 +154,14 @@ if current_user == "Kaisar":
         horizontal=True
     )
 else:
-    # For Rahil, Azaan, and Friend, we don't need filters yet.
-    # We just set this variable silently so the code doesn't crash.
     day_filter = "All Exercises"
 
-    
 with st.form("workout_form", clear_on_submit=True):
     col1, col2 = st.columns(2)
     with col1:
         d = st.date_input("Date", date.today())
+        
+        # LOGIC FOR EXERCISE SELECTION
         if current_user == "Rahil":
             exercise_options = exercises_rahil
         elif current_user == "Azaan":
@@ -152,9 +179,12 @@ with st.form("workout_form", clear_on_submit=True):
                 exercise_options = exercises_abs
             else:
                 exercise_options = exercises_tue + exercises_thu + exercises_sat + exercises_upper + exercises_abs
+        else:
+            # Fallback for Friend
+            exercise_options = ["Pushups", "Squats"]
                 
         exercise = st.selectbox("Exercise", exercise_options)
-        Bodyweight =st.number_input("Bodyweight (kg)", min_value=0.0, step=0.5, value=70.0)
+        Bodyweight = st.number_input("Bodyweight (kg)", min_value=0.0, step=0.5, value=70.0)
         
     with col2:
         weight = st.number_input("Weight (kg)", min_value=0.0, step=0.5)
@@ -166,31 +196,68 @@ with st.form("workout_form", clear_on_submit=True):
     submitted = st.form_submit_button("Save Workout")
 
     if submitted:
-        date_str = d.strftime("%Y-%m-%d")
         try:
-            sheet = connect_to_sheet()
-            new_row = [date_str, exercise, weight, sets, reps, rpe, current_user, notes,Bodyweight]
-            sheet.append_row(new_row)
-            st.success(f"✅ Added: {exercise} ({weight}kg)")
-            import time
+            # 1. Connect to the database
+            engine = get_engine()
+            
+            # 2. The SQL Command (The "Order")
+            # We use :parameters to safely pass data (prevents hacking)
+            sql_query = text("""
+                INSERT INTO workouts (date, exercise, weight, sets, reps, rpe, username, notes, bodyweight)
+                VALUES (:date, :exercise, :weight, :sets, :reps, :rpe, :username, :notes, :bodyweight)
+            """)
+            
+            # 3. The Data Packet
+            data = {
+                "date": d,
+                "exercise": exercise,
+                "weight": weight,
+                "sets": sets,
+                "reps": reps,
+                "rpe": rpe,
+                "username": current_user,  # Note: DB column is 'username', not 'User'
+                "notes": notes,
+                "bodyweight": Bodyweight
+            }
+
+            # 4. Execute
+            with engine.connect() as conn:
+                conn.execute(sql_query, data)
+                conn.commit()
+                
+            st.success(f"✅ Saved to Cloud SQL: {exercise} ({weight}kg)")
             time.sleep(1)
-            st.rerun() 
+            st.rerun()
+            
         except Exception as e:
-            st.error(f"❌ Failed to save to Google Sheets: {e}")
+            st.error(f"❌ Save Failed: {e}")
+
 
 # --- SECTION 2: DASHBOARD ---
 st.divider()
 
 try:
-    sheet = connect_to_sheet()
-    raw_data = sheet.get_all_records()
-    df = pd.DataFrame(raw_data)
-    if df.empty:
-        df = pd.DataFrame(columns=["Date", "Exercise", "Weight_kg", "Sets", "Reps", "RPE", "User", "Notes","Bodyweight"])
+    engine = get_engine()
+    # Read the entire table
+    df = pd.read_sql("SELECT * FROM workouts", engine)
+    
+    # ✅ FIX: Rename ALL lowercase SQL columns to Capitalized style
+    df = df.rename(columns={
+        "date": "Date",
+        "exercise": "Exercise",  # <--- This was missing!
+        "weight": "Weight_kg",
+        "sets": "Sets",
+        "reps": "Reps",
+        "rpe": "RPE",           # <--- This was likely missing too
+        "username": "User",
+        "notes": "Notes",
+        "bodyweight": "Bodyweight"
+    })
 except Exception as e:
-    st.error(f"❌ Error connecting to Google Sheets: {e}")
+    st.error(f"❌ Error loading data: {e}")
     st.stop()
 
+# Filter Data for Current User
 if "User" in df.columns:
     df = df[df["User"] == current_user]
 else:
@@ -205,28 +272,28 @@ if not df.empty:
     df["Reps"] = pd.to_numeric(df["Reps"], errors='coerce').fillna(0)
     df["Bodyweight"] = pd.to_numeric(df["Bodyweight"],errors='coerce').fillna(0)
     df["Volume_kg"] = df["Sets"] * df["Reps"] * df["Weight_kg"]
-    df["e1RM"] = df["Weight_kg"] * (1 + (df["Reps"] / 30))
-
+    
     st.subheader(f"🏆 {current_user}'s Trophy Room (PRs)")
     best_lifts = df.groupby("Exercise")["Weight_kg"].max().reset_index().sort_values(by="Weight_kg", ascending=False)
     st.dataframe(best_lifts, hide_index=True, use_container_width=True)
 
-    # 1. Define the tabs everyone sees
+    # Tabs
     tabs_list = ["➕ Log Workout", "📊 Progress", "📅 History", "📉 RPE", "⚖️ Bodyweight"]
-
-    # 2. If it is YOU (Kaisar), add the Admin tab
     if current_user == "Kaisar":
         tabs_list.append("🛠️ Manage Data")
 
-    # 3. Create the tabs
     all_tabs = st.tabs(tabs_list)
-
-    # 4. Unpack them (This is a bit tricky, follow closely)
-    tab1, tab2, tab3, tab4, tab6 = all_tabs[0], all_tabs[1], all_tabs[2], all_tabs[3], all_tabs[4]
-
-    # Only define tab5 if it exists
+    
+    # We unpack safely based on length
+    tab1 = all_tabs[0]
+    tab2 = all_tabs[1]
+    tab3 = all_tabs[2]
+    tab4 = all_tabs[3]
+    tab6 = all_tabs[4] # Bodyweight
+    
     if current_user == "Kaisar":
         tab5 = all_tabs[5]
+
     with tab1:
         target_exercise = st.selectbox("Select Exercise:", df["Exercise"].unique())
         strength_data = df[df["Exercise"] == target_exercise]
@@ -241,6 +308,11 @@ if not df.empty:
         if "Notes" in df.columns:
             notes_df = df[df["Notes"] != ""][["Display_Date", "Exercise", "Weight_kg", "Notes"]]
             st.dataframe(notes_df, hide_index=True, use_container_width=True)
+            
+    # Bodyweight Tab
+    with tab6: 
+         st.line_chart(df.groupby("Display_Date")["Bodyweight"].mean())
+
     if current_user == "Kaisar":
         with tab5:
             st.subheader("🛠️ Manage Data")
@@ -258,7 +330,6 @@ if not df.empty:
                     try:
                         sheet.delete_rows(int(row_to_delete))
                         st.success(f"✅ Deleted Row {row_to_delete}!")
-                        import time
                         time.sleep(1)
                         st.rerun()
                     except Exception as e:
