@@ -4,3 +4,5 @@ pandas
 plotly
 gspread
 extra-streamlit-components
+SQLAlchemy
+psycopg2-binary
