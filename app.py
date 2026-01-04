@@ -21,6 +21,10 @@ if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["username"] = None
 
+# 🛑 SAFETY FLAG: Prevents "Login Loop"
+if "logout_clicked" not in st.session_state:
+    st.session_state["logout_clicked"] = False
+
 # --- DATABASE CONNECTION ---
 def get_engine():
     try:
@@ -34,11 +38,9 @@ def get_engine():
 def get_exercises_from_db(user, category_filter=None):
     engine = get_engine()
     try:
-        # Build query: Get exercises for THIS user
         query_str = "SELECT name FROM exercise_library WHERE username = :user"
         params = {"user": user}
         
-        # If a specific category is selected (e.g., "Tuesday"), filter by it
         if category_filter and category_filter != "All Exercises":
             query_str += " AND category = :cat"
             params["cat"] = category_filter
@@ -55,7 +57,8 @@ def get_exercises_from_db(user, category_filter=None):
 time.sleep(0.1) 
 cookie_user = cookie_manager.get(cookie="arm_wrestling_user")
 
-if not st.session_state["logged_in"] and cookie_user:
+# THE FIX: We only auto-login if the user DID NOT just click logout
+if not st.session_state["logged_in"] and cookie_user and not st.session_state["logout_clicked"]:
     if "passwords" in st.secrets and cookie_user in st.secrets["passwords"]:
         st.session_state["logged_in"] = True
         st.session_state["username"] = cookie_user
@@ -74,7 +77,10 @@ def check_login(username, password):
             st.session_state["logged_in"] = True
             st.session_state["username"] = username
             
-            # 🍪 SAVE THE COOKIE (Expires in 30 days)
+            # RESET THE LOGOUT FLAG so they can login again!
+            st.session_state["logout_clicked"] = False
+            
+            # 🍪 SAVE THE COOKIE
             expires = datetime.now() + timedelta(days=30)
             cookie_manager.set("arm_wrestling_user", username, expires_at=expires)
             
@@ -103,7 +109,7 @@ if not st.session_state["logged_in"]:
 
 st.title("Workout Log")
 
-# CATEGORY MAP (For Analysis)
+# CATEGORY MAP
 CATEGORY_MAP = {
     "Index Knuckle Pronation": "Pronation",
     "Heavy Pronation Lift": "Pronation",
@@ -130,11 +136,18 @@ with st.sidebar:
     current_user = st.session_state["username"]
     st.info(f"Logged in as: **{current_user}**")
 
-    # LOGOUT BUTTON (Nuclear Option)
+    # LOGOUT BUTTON (The Fixed Version)
     if st.button("Log Out"):
+        # 1. Overwrite cookie (Try to kill it)
         cookie_manager.set("arm_wrestling_user", "logged_out")
+        
+        # 2. Clear Session
         st.session_state["logged_in"] = False
         st.session_state["username"] = None
+        
+        # 3. SET THE STOP SIGN: Prevent Auto-Login on next run
+        st.session_state["logout_clicked"] = True
+        
         st.success("Logging out...")
         time.sleep(1)
         st.rerun()
@@ -142,7 +155,6 @@ with st.sidebar:
 # --- SECTION 1: INPUT FORM ---
 st.header(f"Log a Set for {current_user}")
 
-# Day Filters (Only for Kaisar)
 if current_user == "Kaisar":
     day_filter = st.radio(
         "⚡ Quick Select Day:", 
@@ -157,8 +169,6 @@ with st.form("workout_form", clear_on_submit=True):
     with col1:
         d = st.date_input("Date", date.today())
         
-        # --- DYNAMIC EXERCISE LOADING ---
-        # 1. Map Radio Buttons to DB Categories
         db_category_map = {
             "Tue (Heavy/Vol)": "Tuesday",
             "Thu (Statics)": "Thursday", 
@@ -167,13 +177,9 @@ with st.form("workout_form", clear_on_submit=True):
             "Abs": "Abs"
         }
         
-        # 2. Get Clean Name
         selected_db_category = db_category_map.get(day_filter, None)
-        
-        # 3. Fetch from DB
         exercise_options = get_exercises_from_db(current_user, selected_db_category)
         
-        # 4. Fallback if empty
         if not exercise_options:
             exercise_options = ["⚠️ No exercises found! Add some in 'Manage Data'."]
 
@@ -219,7 +225,6 @@ try:
     engine = get_engine()
     df = pd.read_sql("SELECT * FROM workouts", engine)
     
-    # Standardize Column Names
     df = df.rename(columns={
         "date": "Date", "exercise": "Exercise", "weight": "Weight_kg",
         "sets": "Sets", "reps": "Reps", "rpe": "RPE", "username": "User",
@@ -249,13 +254,13 @@ if not df.empty:
     best_lifts = df.groupby("Exercise")["Weight_kg"].max().reset_index().sort_values(by="Weight_kg", ascending=False)
     st.dataframe(best_lifts, hide_index=True, use_container_width=True)
 
-    # --- TABS (Volume Removed) ---
-    tabs_list = ["➕ Log Workout", "📈 Strength", "📅 History", "📚 Logbook", "⚖️ Bodyweight", "🛠️ Manage Data"]
+    # --- TABS CONFIGURATION (Removed "Log Workout") ---
+    tabs_list = ["📈 Progress", "📅 History", "📚 Logbook", "⚖️ Bodyweight", "🛠️ Manage Data"]
     all_tabs = st.tabs(tabs_list)
     
-    tab1, tab2, tab3, tab4, tab5, tab6 = all_tabs[0], all_tabs[1], all_tabs[2], all_tabs[3], all_tabs[4], all_tabs[5]
+    tab1, tab2, tab3, tab4, tab5 = all_tabs[0], all_tabs[1], all_tabs[2], all_tabs[3], all_tabs[4]
 
-    with tab1: # Strength
+    with tab1: # Progress
         target_exercise = st.selectbox("Select Exercise:", df["Exercise"].unique())
         strength_data = df[df["Exercise"] == target_exercise]
         st.line_chart(strength_data.groupby("Display_Date")["Weight_kg"].max())
@@ -263,7 +268,7 @@ if not df.empty:
     with tab2: # History
         st.dataframe(df.sort_values("Date", ascending=False), use_container_width=True, hide_index=True)
         
-    with tab3: # Logbook (Notion Style)
+    with tab3: # Logbook
         st.subheader("📚 Training Logbook (Notion Style)")
         st.caption("Click a day to see your history.")
 
@@ -278,13 +283,14 @@ if not df.empty:
                         day_data.sort_values("Date", ascending=False)[["Display_Date", "Exercise", "Weight_kg", "Sets", "Reps", "Notes"]], 
                         use_container_width=True, hide_index=True
                     )
+
     with tab4: # Bodyweight
         st.line_chart(df.groupby("Display_Date")["Bodyweight"].mean())
 
-    with tab5: # Manage Data (Add + Delete)
+    with tab5: # Manage Data
         st.subheader("🛠️ Manage Exercises")
         
-        # 1. ADD NEW EXERCISE
+        # ADD EXERCISE FORM
         with st.expander("➕ Add New Exercise to Library"):
             with st.form("add_ex_form"):
                 new_ex_name = st.text_input("Name (e.g. King's Move)")
@@ -305,7 +311,7 @@ if not df.empty:
 
         st.divider()
         
-        # 2. DELETE WORKOUT LOGS
+        # DELETE FORM
         st.subheader(f"🗑️ Delete {current_user}'s Logs")
         manage_df = df.copy().sort_values("id", ascending=False)
         st.dataframe(manage_df[["id", "Date", "Exercise", "Weight_kg", "Notes"]], hide_index=True, use_container_width=True)
@@ -319,7 +325,6 @@ if not df.empty:
                 try:
                     engine = get_engine()
                     with engine.connect() as conn:
-                        # Secure Delete
                         query = text("DELETE FROM workouts WHERE id = :id AND username = :user")
                         result = conn.execute(query, {"id": row_to_delete, "user": current_user})
                         conn.commit()
