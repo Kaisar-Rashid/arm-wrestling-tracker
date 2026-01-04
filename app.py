@@ -16,12 +16,10 @@ def get_manager():
 
 cookie_manager = get_manager()
 
-# Initialize Session State
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["username"] = None
 
-# 🛑 SAFETY FLAG: Prevents "Login Loop"
 if "logout_clicked" not in st.session_state:
     st.session_state["logout_clicked"] = False
 
@@ -34,30 +32,42 @@ def get_engine():
         st.error(f"❌ Database Connection Error: {e}")
         st.stop()
 
-# --- FETCH EXERCISES FROM SQL (Dynamic List) ---
+# --- HELPER 1: FETCH EXERCISES ---
 def get_exercises_from_db(user, category_filter=None):
     engine = get_engine()
     try:
         query_str = "SELECT name FROM exercise_library WHERE username = :user"
         params = {"user": user}
-        
         if category_filter and category_filter != "All Exercises":
             query_str += " AND category = :cat"
             params["cat"] = category_filter
-            
         with engine.connect() as conn:
             result = conn.execute(text(query_str), params)
             rows = result.fetchall()
             return [row[0] for row in rows]
-            
     except Exception:
         return []
 
-# --- 1. AUTO-LOGIN (CHECK COOKIE) ---
+# --- HELPER 2: FETCH LAST LOG ---
+def get_last_log(user, exercise_name):
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            query = text("""
+                SELECT date, weight, sets, reps, notes
+                FROM workouts
+                WHERE username = :user AND exercise = :ex
+                ORDER BY date DESC LIMIT 1
+            """)
+            result = conn.execute(query, {"user": user, "ex": exercise_name}).fetchone()
+            return result
+    except Exception:
+        return None
+
+# --- 1. AUTO-LOGIN ---
 time.sleep(0.1) 
 cookie_user = cookie_manager.get(cookie="arm_wrestling_user")
 
-# THE FIX: We only auto-login if the user DID NOT just click logout
 if not st.session_state["logged_in"] and cookie_user and not st.session_state["logout_clicked"]:
     if "passwords" in st.secrets and cookie_user in st.secrets["passwords"]:
         st.session_state["logged_in"] = True
@@ -66,24 +76,18 @@ if not st.session_state["logged_in"] and cookie_user and not st.session_state["l
         time.sleep(0.5)
         st.rerun()
 
-# --- 2. MANUAL LOGIN FUNCTION ---
+# --- 2. MANUAL LOGIN ---
 def check_login(username, password):
     if "passwords" not in st.secrets:
         st.error("❌ Error: 'secrets.toml' is missing!")
         return
-
     if username in st.secrets["passwords"]:
         if st.secrets["passwords"][username] == password:
             st.session_state["logged_in"] = True
             st.session_state["username"] = username
-            
-            # RESET THE LOGOUT FLAG so they can login again!
             st.session_state["logout_clicked"] = False
-            
-            # 🍪 SAVE THE COOKIE
             expires = datetime.now() + timedelta(days=30)
             cookie_manager.set("arm_wrestling_user", username, expires_at=expires)
-            
             st.success("Logged in!")
             time.sleep(0.5)
             st.rerun()
@@ -92,7 +96,7 @@ def check_login(username, password):
     else:
         st.error("❌ User not found")
 
-# --- 3. THE GATEKEEPER (LOGIN SCREEN) ---
+# --- 3. LOGIN SCREEN ---
 if not st.session_state["logged_in"]:
     st.title("🔒Workout Buddy")
     with st.form("login_form"):
@@ -111,43 +115,28 @@ st.title("Workout Log")
 
 # CATEGORY MAP
 CATEGORY_MAP = {
-    "Index Knuckle Pronation": "Pronation",
-    "Heavy Pronation Lift": "Pronation",
-    "Static Back Pressure": "Back Pressure",
-    "Single-Loop Back Pressure":"Back Pressure",
-    "Cupping (Pulley)": "Cupping",
-    "Low Multi-Spinner":"Cupping",
-    "Volume Cupping":"Cupping",
-    "Static Cupping":"Cupping",
-    "Finger Containment (Static)": "Fingers",
-    "Heavy Wrist Wrench": "Wrist",
-    "Rising (Belt)": "Rising",
-    "Volume Side Pressure": "Side Pressure",
-    "Volume Rising": "Rising",
-    "Static Pronation" :"Pronation",
-    "Heavy Riser":"Rising",
-    "High Cable Side Pressure":"Side Pressure",
+    "Index Knuckle Pronation": "Pronation", "Heavy Pronation Lift": "Pronation",
+    "Static Back Pressure": "Back Pressure", "Single-Loop Back Pressure":"Back Pressure",
+    "Cupping (Pulley)": "Cupping", "Low Multi-Spinner":"Cupping",
+    "Volume Cupping":"Cupping", "Static Cupping":"Cupping",
+    "Finger Containment (Static)": "Fingers", "Heavy Wrist Wrench": "Wrist",
+    "Rising (Belt)": "Rising", "Volume Side Pressure": "Side Pressure",
+    "Volume Rising": "Rising", "Static Pronation" :"Pronation",
+    "Heavy Riser":"Rising", "High Cable Side Pressure":"Side Pressure",
     "Partial Curl":"Bicep" 
 }
 
-# --- SIDEBAR: USER INFO & LOGOUT ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("👤 Who is training?")
     current_user = st.session_state["username"]
     st.info(f"Logged in as: **{current_user}**")
 
-    # LOGOUT BUTTON (The Fixed Version)
     if st.button("Log Out"):
-        # 1. Overwrite cookie (Try to kill it)
         cookie_manager.set("arm_wrestling_user", "logged_out")
-        
-        # 2. Clear Session
         st.session_state["logged_in"] = False
         st.session_state["username"] = None
-        
-        # 3. SET THE STOP SIGN: Prevent Auto-Login on next run
         st.session_state["logout_clicked"] = True
-        
         st.success("Logging out...")
         time.sleep(1)
         st.rerun()
@@ -155,44 +144,62 @@ with st.sidebar:
 # --- SECTION 1: INPUT FORM ---
 st.header(f"Log a Set for {current_user}")
 
+# 1. FILTERS & EXERCISE SELECTION (OUTSIDE THE FORM NOW!) 🔓
+# This allows the app to refresh and show stats immediately when you change exercise.
+
 if current_user == "Kaisar":
-    day_filter = st.radio(
-        "⚡ Quick Select Day:", 
-        ["All Exercises", "Tue (Heavy/Vol)", "Thu (Statics)", "Sat (Table Power)", "Upper Body", "Abs"], 
-        horizontal=True
-    )
+    day_filter = st.radio("⚡ Quick Select Day:", ["All Exercises", "Tue (Heavy/Vol)", "Thu (Statics)", "Sat (Table Power)", "Upper Body", "Abs"], horizontal=True)
+elif current_user == "Rahil":
+    day_filter = st.radio("⚡ Quick Select Day:", ["All Exercises", "Monday", "Wednesday", "Friday", "Saturday"], horizontal=True)
 else:
     day_filter = "All Exercises"
 
-with st.form("workout_form", clear_on_submit=True):
+# Logic to get the list of exercises
+db_category_map = {
+    "Tue (Heavy/Vol)": "Tuesday", "Thu (Statics)": "Thursday", "Sat (Table Power)": "Saturday",
+    "Upper Body": "Upper Body", "Abs": "Abs", "Monday": "Monday", "Wednesday": "Wednesday", "Friday": "Friday"
+}
+selected_db_category = db_category_map.get(day_filter, None)
+exercise_options = get_exercises_from_db(current_user, selected_db_category)
+
+if not exercise_options:
+    exercise_options = ["⚠️ No exercises found! Add some in 'Manage Data'."]
+
+# THE EXERCISE DROPDOWN (Now active & instant)
+exercise = st.selectbox("Select Exercise to Log:", exercise_options)
+
+# 🔥 PROGRESSIVE OVERLOAD DISPLAY (Updates Instantly) 🔥
+last_log = get_last_log(current_user, exercise)
+if last_log:
+    last_date, last_weight, last_sets, last_reps, last_note = last_log
+    
+    # Date formatting
+    if isinstance(last_date, str):
+        d_str = datetime.strptime(last_date, '%Y-%m-%d').strftime("%b %d")
+    else:
+        d_str = last_date.strftime("%b %d")
+        
+    # Display the stats clearly with the Exercise Name
+    st.info(f"🔙 **Last time you did {exercise} ({d_str}):**\n\n {last_weight}kg × {last_reps} reps ({last_sets} sets)")
+else:
+    st.info(f"🆕 No history found for **{exercise}**. Go crush it!")
+
+# 2. THE LOGGING FORM (Inputs Only) 📝
+with st.form("workout_form", clear_on_submit=False): 
     col1, col2 = st.columns(2)
     with col1:
         d = st.date_input("Date", date.today())
-        
-        db_category_map = {
-            "Tue (Heavy/Vol)": "Tuesday",
-            "Thu (Statics)": "Thursday", 
-            "Sat (Table Power)": "Saturday",
-            "Upper Body": "Upper Body",
-            "Abs": "Abs"
-        }
-        
-        selected_db_category = db_category_map.get(day_filter, None)
-        exercise_options = get_exercises_from_db(current_user, selected_db_category)
-        
-        if not exercise_options:
-            exercise_options = ["⚠️ No exercises found! Add some in 'Manage Data'."]
-
-        exercise = st.selectbox("Exercise", exercise_options)
         Bodyweight = st.number_input("Bodyweight (kg)", min_value=0.0, step=0.5, value=70.0)
         
     with col2:
         weight = st.number_input("Weight (kg)", min_value=0.0, step=0.5)
         sets = st.number_input("Sets", min_value=1, step=1, value=3)
-        reps = st.number_input("Reps", min_value=1, step=1, value=10)
+        reps = st.text_input("Reps", value="10", help="e.g. 10 or 5,4,3")
         
     rpe = st.slider("RPE (Intensity)", 1, 10, 8)
     notes = st.text_input("📝 Notes (Optional)", placeholder="Form cue, pain check, etc.")
+    
+    # Save Button
     submitted = st.form_submit_button("Save Workout")
 
     if submitted:
@@ -209,62 +216,48 @@ with st.form("workout_form", clear_on_submit=True):
             with engine.connect() as conn:
                 conn.execute(sql_query, data)
                 conn.commit()
-                
-            st.success(f"✅ Saved to Cloud SQL: {exercise} ({weight}kg)")
+            st.success(f"✅ Saved {exercise}!")
             time.sleep(1)
             st.rerun()
-            
         except Exception as e:
             st.error(f"❌ Save Failed: {e}")
 
 
 # --- SECTION 2: DASHBOARD ---
-# --- SECTION 2: DASHBOARD ---
 st.divider()
 
-# 1. LOAD DATA
 try:
     engine = get_engine()
     df = pd.read_sql("SELECT * FROM workouts", engine)
-    
-    # Standardize Column Names
-    df = df.rename(columns={
-        "date": "Date", "exercise": "Exercise", "weight": "Weight_kg",
-        "sets": "Sets", "reps": "Reps", "rpe": "RPE", "username": "User",
-        "notes": "Notes", "bodyweight": "Bodyweight"
-    })
+    df = df.rename(columns={"date": "Date", "exercise": "Exercise", "weight": "Weight_kg", "sets": "Sets", "reps": "Reps", "rpe": "RPE", "username": "User", "notes": "Notes", "bodyweight": "Bodyweight"})
 except Exception as e:
     st.error(f"❌ Error loading data: {e}")
     st.stop()
 
-# 2. FILTER BY USER
 if "User" in df.columns:
     df = df[df["User"] == current_user]
 else:
     df = pd.DataFrame()
 
-# 3. PROCESS DATA (Only if it exists)
 if not df.empty:
     df["Category"] = df["Exercise"].map(CATEGORY_MAP).fillna("Other")
     df["Date"] = pd.to_datetime(df["Date"])
     df["Display_Date"] = df["Date"].dt.strftime('%Y-%m-%d')
     df["Weight_kg"] = pd.to_numeric(df["Weight_kg"], errors='coerce').fillna(0)
     df["Sets"] = pd.to_numeric(df["Sets"], errors='coerce').fillna(0)
-    df["Reps"] = pd.to_numeric(df["Reps"], errors='coerce').fillna(0)
+    # NOTE: We do NOT force Reps to numeric anymore, so "5,4,3" is allowed.
     df["Bodyweight"] = pd.to_numeric(df["Bodyweight"],errors='coerce').fillna(0)
     
     st.subheader(f"🏆 {current_user}'s Workspace")
     best_lifts = df.groupby("Exercise")["Weight_kg"].max().reset_index().sort_values(by="Weight_kg", ascending=False)
     st.dataframe(best_lifts, hide_index=True, use_container_width=True)
 else:
-    st.info(f"👋 Welcome, {current_user}! You haven't logged any workouts yet. Go to 'Manage Data' to add exercises, then log your first set!")
+    st.info(f"👋 Welcome, {current_user}! You haven't logged any workouts yet.")
 
-# 4. CREATE TABS (Always show these, even if data is empty!)
+# --- TABS ---
 tabs_list = ["📈 Progress", "📅 History", "📚 Logbook", "⚖️ Bodyweight", "🛠️ Manage Data"]
 all_tabs = st.tabs(tabs_list)
 tab1, tab2, tab3, tab4, tab5 = all_tabs[0], all_tabs[1], all_tabs[2], all_tabs[3], all_tabs[4]
-
-# --- TAB CONTENT ---
 
 with tab1: # Progress
     if not df.empty:
@@ -300,16 +293,14 @@ with tab4: # Bodyweight
     else:
         st.write("Track your bodyweight to see it here.")
 
-with tab5: # Manage Data (ALWAYS VISIBLE)
+with tab5: # Manage Data
     st.subheader("🛠️ Manage Exercises")
     
-    # 1. ADD EXERCISE FORM
     with st.expander("➕ Add New Exercise to Library"):
         with st.form("add_ex_form"):
             new_ex_name = st.text_input("Name (e.g. King's Move)")
-            cat_options = ["Tuesday", "Thursday", "Saturday", "Upper Body", "Abs", "General"]
+            cat_options = ["Tuesday", "Thursday", "Saturday", "Upper Body", "Abs", "General", "Monday", "Wednesday", "Friday"]
             new_ex_cat = st.selectbox("Category", cat_options)
-            
             if st.form_submit_button("Add"):
                 engine = get_engine()
                 with engine.connect() as conn:
@@ -321,15 +312,12 @@ with tab5: # Manage Data (ALWAYS VISIBLE)
                 st.success(f"Added {new_ex_name}!")
                 time.sleep(1)
                 st.rerun()
-
     st.divider()
     
-    # 2. DELETE FORM (Only if data exists)
     st.subheader(f"🗑️ Delete {current_user}'s Logs")
     if not df.empty:
         manage_df = df.copy().sort_values("id", ascending=False)
         st.dataframe(manage_df[["id", "Date", "Exercise", "Weight_kg", "Notes"]], hide_index=True, use_container_width=True)
-        
         col_del_1, col_del_2 = st.columns([1, 2])
         with col_del_1:
             row_to_delete = st.number_input("Enter ID to Delete", min_value=1, step=1)
