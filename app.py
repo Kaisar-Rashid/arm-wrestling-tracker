@@ -8,7 +8,7 @@ import os
 import time
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Arm Wrestling Tracker", page_icon="💪", layout="wide")
+st.set_page_config(page_title="Workout Buddy", page_icon="💪", layout="wide")
 
 # --- AUTHENTICATION & COOKIE SETUP ---
 def get_manager():
@@ -60,7 +60,7 @@ def check_login(username, password):
 
 # --- 3. THE GATEKEEPER (LOGIN SCREEN) ---
 if not st.session_state["logged_in"]:
-    st.title("🔒 Arm Wrestling Tracker")
+    st.title("🔒Workout Buddy")
     
     with st.form("login_form"):
         user_input = st.text_input("Username")
@@ -76,7 +76,7 @@ if not st.session_state["logged_in"]:
 #  ✅ MAIN APP STARTS HERE (Only runs if logged in)
 # =========================================================
 
-st.title("Arm Wrestling Training Log")
+st.title("Workout Log")
 
 # --- CONFIGURATION ---
 GOOGLE_SHEET_NAME = "Arm Wrestling Data"
@@ -129,6 +129,7 @@ def get_engine():
 
 
 # --- SIDEBAR: USER INFO ---
+# --- SIDEBAR: USER INFO ---
 with st.sidebar:
     st.header("👤 Who is training?")
     
@@ -138,9 +139,23 @@ with st.sidebar:
 
     # LOGOUT BUTTON
     if st.button("Log Out"):
-        cookie_manager.delete("arm_wrestling_user")
+        # 1. POISON PILL: Overwrite the cookie with a fake value first
+        # This prevents the "Login Loop"
+        cookie_manager.set("arm_wrestling_user", "logged_out")
+        
+        # 2. DELETE with SAFETY NET
+        # We wrap this in try/except so the app DOES NOT CRASH if the cookie is already gone
+        try:
+            cookie_manager.delete("arm_wrestling_user")
+        except KeyError:
+            pass # ignore the error!
+        
+        # 3. Clear Session State
         st.session_state["logged_in"] = False
         st.session_state["username"] = None
+        
+        st.success("Logging out...")
+        time.sleep(1)
         st.rerun()
 
 # --- SECTION 1: INPUT FORM ---
@@ -241,23 +256,25 @@ try:
     # Read the entire table
     df = pd.read_sql("SELECT * FROM workouts", engine)
     
-    # ✅ FIX: Rename ALL lowercase SQL columns to Capitalized style
+    # Rename columns to match your old code
     df = df.rename(columns={
         "date": "Date",
-        "exercise": "Exercise",  # <--- This was missing!
+        "exercise": "Exercise",
         "weight": "Weight_kg",
         "sets": "Sets",
         "reps": "Reps",
-        "rpe": "RPE",           # <--- This was likely missing too
+        "rpe": "RPE",
         "username": "User",
         "notes": "Notes",
         "bodyweight": "Bodyweight"
     })
+
 except Exception as e:
     st.error(f"❌ Error loading data: {e}")
     st.stop()
 
-# Filter Data for Current User
+# --- STRICT PRIVACY FILTER ---
+# "Rahil will log his own workout... without seeing mine"
 if "User" in df.columns:
     df = df[df["User"] == current_user]
 else:
@@ -273,26 +290,16 @@ if not df.empty:
     df["Bodyweight"] = pd.to_numeric(df["Bodyweight"],errors='coerce').fillna(0)
     df["Volume_kg"] = df["Sets"] * df["Reps"] * df["Weight_kg"]
     
-    st.subheader(f"🏆 {current_user}'s Trophy Room (PRs)")
+    st.subheader(f"🏆 {current_user}'s Workspace")
     best_lifts = df.groupby("Exercise")["Weight_kg"].max().reset_index().sort_values(by="Weight_kg", ascending=False)
     st.dataframe(best_lifts, hide_index=True, use_container_width=True)
 
-    # Tabs
-    tabs_list = ["➕ Log Workout", "📊 Progress", "📅 History", "📉 Notes", "⚖️ Bodyweight"]
-    if current_user == "Kaisar":
-        tabs_list.append("🛠️ Manage Data")
-
+    # --- TABS FOR EVERYONE ---
+    # Now Rahil gets "Manage Data" too
+    tabs_list = ["➕ Log Workout", "📊 Progress", "📅 History", "📝 Logbook", "⚖️ Bodyweight", "🛠️ Manage Data"]
     all_tabs = st.tabs(tabs_list)
     
-    # We unpack safely based on length
-    tab1 = all_tabs[0]
-    tab2 = all_tabs[1]
-    tab3 = all_tabs[2]
-    tab4 = all_tabs[3]
-    tab6 = all_tabs[4] # Bodyweight
-    
-    if current_user == "Kaisar":
-        tab5 = all_tabs[5]
+    tab1, tab2, tab3, tab4, tab5, tab6 = all_tabs[0], all_tabs[1], all_tabs[2], all_tabs[3], all_tabs[4], all_tabs[5]
 
     with tab1:
         target_exercise = st.selectbox("Select Exercise:", df["Exercise"].unique())
@@ -301,56 +308,79 @@ if not df.empty:
     with tab2:
         st.bar_chart(df.groupby("Display_Date")["Volume_kg"].sum())
     with tab3:
-        st.subheader("Style Split")
-        fig = px.pie(df.groupby("Category")["Sets"].sum().reset_index(), values='Sets', names='Category', hole=0.4)
-        st.plotly_chart(fig, use_container_width=True)
+        # History Tab
+        st.dataframe(df.sort_values("Date", ascending=False), use_container_width=True, hide_index=True)
     with tab4:
-        if "Notes" in df.columns:
-            notes_df = df[df["Notes"] != ""][["Display_Date", "Exercise", "Weight_kg", "Notes"]]
-            st.dataframe(notes_df, hide_index=True, use_container_width=True)
+        st.subheader("📚 Training Logbook (Notion Style)")
+        st.write("Your history grouped by training day.")
+
+        # 1. Create a "Day Name" column (e.g., "Tuesday", "Thursday")
+        df["Day_Name"] = df["Date"].dt.day_name()
+        
+        # 2. Define your specific sorting order (Not just alphabetical)
+        # We want the week to start on Monday or Tuesday as per your schedule
+        days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        
+        # 3. Create an Expander (Folder) for every day of the week
+        for day in days_order:
+            # Filter data for just this day
+            day_data = df[df["Day_Name"] == day]
             
-    # Bodyweight Tab
-    with tab6: 
+            # Only show the folder if there is actual data
+            if not day_data.empty:
+                # Calculate total sets to show a quick summary stat
+                total_sets = day_data["Sets"].sum()
+                
+                # Create the Notion-style collapsible header
+                with st.expander(f"🗓️ {day} ({len(day_data)} logs)"):
+                    # Show the table for this day
+                    # We sort by Date descending so newest Tuesday is at top
+                    st.dataframe(
+                        day_data.sort_values("Date", ascending=False)[["Display_Date", "Exercise", "Weight_kg", "Sets", "Reps", "Notes"]], 
+                        use_container_width=True, 
+                        hide_index=True
+                    )
+    with tab5: 
         st.line_chart(df.groupby("Display_Date")["Bodyweight"].mean())
 
-    if current_user == "Kaisar":
-        with tab5:
-            st.subheader("🛠️ Manage Data")
-            
-            # 1. Show the data with the ID column
-            # We sort by ID descending so the newest stuff is at the top
-            manage_df = df.copy().sort_values("id", ascending=False)
-            
-            # Display it so you can see the IDs
-            st.dataframe(
-                manage_df[["id", "Date", "Exercise", "Weight_kg", "Bodyweight", "Notes"]], 
-                hide_index=True, 
-                use_container_width=True
-            )
-            
-            st.warning("⚠️ Deleting is permanent!")
-            
-            col_del_1, col_del_2 = st.columns([1, 2])
-            with col_del_1:
-                # 2. Ask for the ID (Unique Ticket Number)
-                id_to_delete = st.number_input("Enter ID to Delete", min_value=1, step=1)
-            
-            with col_del_2:
-                st.write("##") # Spacer
-                if st.button("🗑️ Delete Entry"):
-                    try:
-                        # 3. Connect to SQL and execute the Delete Order
-                        engine = get_engine()
-                        with engine.connect() as conn:
-                            # We use :id to safely pass the number
-                            conn.execute(text("DELETE FROM workouts WHERE id = :id"), {"id": id_to_delete})
-                            conn.commit()
+    # --- THE PRIVATE DELETE TAB ---
+    with tab6:
+        st.subheader(f"🛠️ Manage {current_user}'s Data")
+        
+        # Show ONLY current user's rows with ID
+        manage_df = df.copy().sort_values("id", ascending=False)
+        st.dataframe(
+            manage_df[["id", "Date", "Exercise", "Weight_kg", "Bodyweight", "Notes"]], 
+            hide_index=True, 
+            use_container_width=True
+        )
+        
+        st.warning("⚠️ Deleting is permanent!")
+        col_del_1, col_del_2 = st.columns([1, 2])
+        with col_del_1:
+            row_to_delete = st.number_input("Enter ID to Delete", min_value=1, step=1)
+        with col_del_2:
+            st.write("##")
+            if st.button("🗑️ Delete My Entry"):
+                try:
+                    engine = get_engine()
+                    with engine.connect() as conn:
+                        # SECURITY CHECK:
+                        # We add "AND username = :user" so Rahil CANNOT delete Kaisar's data
+                        # even if he guesses the ID number.
+                        query = text("DELETE FROM workouts WHERE id = :id AND username = :user")
+                        result = conn.execute(query, {"id": row_to_delete, "user": current_user})
+                        conn.commit()
                         
-                        st.success(f"✅ Deleted ID {id_to_delete}!")
-                        time.sleep(1)
-                        st.rerun()
+                        if result.rowcount > 0:
+                            st.success(f"✅ Deleted ID {row_to_delete}!")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("❌ Could not delete. (Either ID doesn't exist, or it belongs to someone else!)")
                         
-                    except Exception as e:
-                        st.error(f"❌ Error deleting: {e}")
+                except Exception as e:
+                    st.error(f"❌ Error: {e}")
+
 else:
-    st.info(f"Welcome {current_user}! Start logging above.")
+    st.info(f"Welcome {current_user}! Start logging above to see your workspace.")
