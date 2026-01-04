@@ -130,6 +130,7 @@ def get_engine():
 
 # --- SIDEBAR: USER INFO ---
 # --- SIDEBAR: USER INFO ---
+# --- SIDEBAR: USER INFO ---
 with st.sidebar:
     st.header("👤 Who is training?")
     
@@ -139,23 +140,17 @@ with st.sidebar:
 
     # LOGOUT BUTTON
     if st.button("Log Out"):
-        # 1. POISON PILL: Overwrite the cookie with a fake value first
-        # This prevents the "Login Loop"
+        # 1. THE NUCLEAR OPTION: Just overwrite the cookie. 
+        # We DO NOT use delete(). If we don't try to delete, we can't get a KeyError.
+        # This makes the cookie invalid ("logged_out"), so the app won't let you back in.
         cookie_manager.set("arm_wrestling_user", "logged_out")
         
-        # 2. DELETE with SAFETY NET
-        # We wrap this in try/except so the app DOES NOT CRASH if the cookie is already gone
-        try:
-            cookie_manager.delete("arm_wrestling_user")
-        except KeyError:
-            pass # ignore the error!
-        
-        # 3. Clear Session State
+        # 2. Clear Session State
         st.session_state["logged_in"] = False
         st.session_state["username"] = None
         
         st.success("Logging out...")
-        time.sleep(1)
+        time.sleep(1) # Short pause to let the overwrite happen
         st.rerun()
 
 # --- SECTION 1: INPUT FORM ---
