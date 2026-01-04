@@ -21,24 +21,52 @@ if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["username"] = None
 
+# --- DATABASE CONNECTION ---
+def get_engine():
+    try:
+        db_url = st.secrets["connections"]["supabase"]["url"]
+        return create_engine(db_url)
+    except Exception as e:
+        st.error(f"❌ Database Connection Error: {e}")
+        st.stop()
+
+# --- FETCH EXERCISES FROM SQL (Dynamic List) ---
+def get_exercises_from_db(user, category_filter=None):
+    engine = get_engine()
+    try:
+        # Build query: Get exercises for THIS user
+        query_str = "SELECT name FROM exercise_library WHERE username = :user"
+        params = {"user": user}
+        
+        # If a specific category is selected (e.g., "Tuesday"), filter by it
+        if category_filter and category_filter != "All Exercises":
+            query_str += " AND category = :cat"
+            params["cat"] = category_filter
+            
+        with engine.connect() as conn:
+            result = conn.execute(text(query_str), params)
+            rows = result.fetchall()
+            return [row[0] for row in rows]
+            
+    except Exception:
+        return []
+
 # --- 1. AUTO-LOGIN (CHECK COOKIE) ---
-# We wait a split second for the cookie manager to load
 time.sleep(0.1) 
 cookie_user = cookie_manager.get(cookie="arm_wrestling_user")
 
 if not st.session_state["logged_in"] and cookie_user:
-    # Validate the cookie against our secrets
     if "passwords" in st.secrets and cookie_user in st.secrets["passwords"]:
         st.session_state["logged_in"] = True
         st.session_state["username"] = cookie_user
         st.success(f"Welcome back, {cookie_user}!")
-        time.sleep(0.5) # Brief pause to show message
+        time.sleep(0.5)
         st.rerun()
 
 # --- 2. MANUAL LOGIN FUNCTION ---
 def check_login(username, password):
     if "passwords" not in st.secrets:
-        st.error("❌ Error: 'secrets.toml' file is missing or empty!")
+        st.error("❌ Error: 'secrets.toml' is missing!")
         return
 
     if username in st.secrets["passwords"]:
@@ -61,27 +89,21 @@ def check_login(username, password):
 # --- 3. THE GATEKEEPER (LOGIN SCREEN) ---
 if not st.session_state["logged_in"]:
     st.title("🔒Workout Buddy")
-    
     with st.form("login_form"):
         user_input = st.text_input("Username")
         pass_input = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Login")
-        
         if submitted:
             check_login(user_input, pass_input)
-    
-    st.stop() # 🛑 APP STOPS HERE IF NOT LOGGED IN
+    st.stop() 
 
 # =========================================================
-#  ✅ MAIN APP STARTS HERE (Only runs if logged in)
+#  ✅ MAIN APP STARTS HERE
 # =========================================================
 
 st.title("Workout Log")
 
-# --- CONFIGURATION ---
-GOOGLE_SHEET_NAME = "Arm Wrestling Data"
-
-# MAP SPECIFIC LIFTS TO BROAD CATEGORIES
+# CATEGORY MAP (For Analysis)
 CATEGORY_MAP = {
     "Index Knuckle Pronation": "Pronation",
     "Heavy Pronation Lift": "Pronation",
@@ -102,61 +124,25 @@ CATEGORY_MAP = {
     "Partial Curl":"Bicep" 
 }
 
-# --- EXERCISE LISTS ---
-# 1. Friends
-exercises_rahil = ["Squat", "Deadlift", "Leg Press", "Calf Raises"]
-exercises_azaan = ["Bicep Curls", "Hammer Curls", "Lat Pulldowns", "Rows"]
-
-# 2. Kaisar's Standard Days
-exercises_upper = ["Smith Bench", "Row", "Cable Chest Flies", "Narrow Pulldown", "Lateral Raises", "JM Press", "Reverse Pec Dec", "Tricep Extension", "Shoulder Press", "Incline Dumbbell Press"]
-exercises_abs = ["Crunches", "Knee Raises"]
-
-# 3. Kaisar's Arm Wrestling Days
-exercises_tue = ["Index Knuckle Pronation", "Heavy Wrist Wrench", "Low Multi-Spinner", "Finger Containment (Static)", "Volume Side Pressure", "Volume Rising", "Volume Pronation"]
-exercises_thu = ["Static Back Pressure", "Static Pronation", "Static Cupping"]
-exercises_sat = ["Single-Loop Back Pressure", "Heavy Pronation Lift", "Heavy Riser", "High Cable Side Pressure", "Partial Curl", "Volume Cupping"]
-
-# --- GOOGLE SHEETS CONNECTION ---
-
-# --- DATABASE CONNECTION ---
-def get_engine():
-    try:
-        db_url = st.secrets["connections"]["supabase"]["url"]
-        return create_engine(db_url)
-    except Exception as e:
-        st.error(f"❌ Database Connection Error: {e}")
-        st.stop()
-
-
-# --- SIDEBAR: USER INFO ---
-# --- SIDEBAR: USER INFO ---
-# --- SIDEBAR: USER INFO ---
+# --- SIDEBAR: USER INFO & LOGOUT ---
 with st.sidebar:
     st.header("👤 Who is training?")
-    
-    # LOCK THE USER to the login name
     current_user = st.session_state["username"]
     st.info(f"Logged in as: **{current_user}**")
 
-    # LOGOUT BUTTON
+    # LOGOUT BUTTON (Nuclear Option)
     if st.button("Log Out"):
-        # 1. THE NUCLEAR OPTION: Just overwrite the cookie. 
-        # We DO NOT use delete(). If we don't try to delete, we can't get a KeyError.
-        # This makes the cookie invalid ("logged_out"), so the app won't let you back in.
         cookie_manager.set("arm_wrestling_user", "logged_out")
-        
-        # 2. Clear Session State
         st.session_state["logged_in"] = False
         st.session_state["username"] = None
-        
         st.success("Logging out...")
-        time.sleep(1) # Short pause to let the overwrite happen
+        time.sleep(1)
         st.rerun()
 
 # --- SECTION 1: INPUT FORM ---
 st.header(f"Log a Set for {current_user}")
 
-# ONLY Show Day Filters for Kaisar
+# Day Filters (Only for Kaisar)
 if current_user == "Kaisar":
     day_filter = st.radio(
         "⚡ Quick Select Day:", 
@@ -171,28 +157,26 @@ with st.form("workout_form", clear_on_submit=True):
     with col1:
         d = st.date_input("Date", date.today())
         
-        # LOGIC FOR EXERCISE SELECTION
-        if current_user == "Rahil":
-            exercise_options = exercises_rahil
-        elif current_user == "Azaan":
-            exercise_options = exercises_azaan
-        elif current_user == "Kaisar":
-            if day_filter == "Tue (Heavy/Vol)":
-                exercise_options = exercises_tue
-            elif day_filter == "Thu (Statics)":
-                exercise_options = exercises_thu
-            elif day_filter == "Sat (Table Power)":
-                exercise_options = exercises_sat
-            elif day_filter == "Upper Body":
-                exercise_options = exercises_upper
-            elif day_filter == "Abs":
-                exercise_options = exercises_abs
-            else:
-                exercise_options = exercises_tue + exercises_thu + exercises_sat + exercises_upper + exercises_abs
-        else:
-            # Fallback for Friend
-            exercise_options = ["Pushups", "Squats"]
-                
+        # --- DYNAMIC EXERCISE LOADING ---
+        # 1. Map Radio Buttons to DB Categories
+        db_category_map = {
+            "Tue (Heavy/Vol)": "Tuesday",
+            "Thu (Statics)": "Thursday", 
+            "Sat (Table Power)": "Saturday",
+            "Upper Body": "Upper Body",
+            "Abs": "Abs"
+        }
+        
+        # 2. Get Clean Name
+        selected_db_category = db_category_map.get(day_filter, None)
+        
+        # 3. Fetch from DB
+        exercise_options = get_exercises_from_db(current_user, selected_db_category)
+        
+        # 4. Fallback if empty
+        if not exercise_options:
+            exercise_options = ["⚠️ No exercises found! Add some in 'Manage Data'."]
+
         exercise = st.selectbox("Exercise", exercise_options)
         Bodyweight = st.number_input("Bodyweight (kg)", min_value=0.0, step=0.5, value=70.0)
         
@@ -207,30 +191,15 @@ with st.form("workout_form", clear_on_submit=True):
 
     if submitted:
         try:
-            # 1. Connect to the database
             engine = get_engine()
-            
-            # 2. The SQL Command (The "Order")
-            # We use :parameters to safely pass data (prevents hacking)
             sql_query = text("""
                 INSERT INTO workouts (date, exercise, weight, sets, reps, rpe, username, notes, bodyweight)
                 VALUES (:date, :exercise, :weight, :sets, :reps, :rpe, :username, :notes, :bodyweight)
             """)
-            
-            # 3. The Data Packet
             data = {
-                "date": d,
-                "exercise": exercise,
-                "weight": weight,
-                "sets": sets,
-                "reps": reps,
-                "rpe": rpe,
-                "username": current_user,  # Note: DB column is 'username', not 'User'
-                "notes": notes,
-                "bodyweight": Bodyweight
+                "date": d, "exercise": exercise, "weight": weight, "sets": sets, 
+                "reps": reps, "rpe": rpe, "username": current_user, "notes": notes, "bodyweight": Bodyweight
             }
-
-            # 4. Execute
             with engine.connect() as conn:
                 conn.execute(sql_query, data)
                 conn.commit()
@@ -248,20 +217,13 @@ st.divider()
 
 try:
     engine = get_engine()
-    # Read the entire table
     df = pd.read_sql("SELECT * FROM workouts", engine)
     
-    # Rename columns to match your old code
+    # Standardize Column Names
     df = df.rename(columns={
-        "date": "Date",
-        "exercise": "Exercise",
-        "weight": "Weight_kg",
-        "sets": "Sets",
-        "reps": "Reps",
-        "rpe": "RPE",
-        "username": "User",
-        "notes": "Notes",
-        "bodyweight": "Bodyweight"
+        "date": "Date", "exercise": "Exercise", "weight": "Weight_kg",
+        "sets": "Sets", "reps": "Reps", "rpe": "RPE", "username": "User",
+        "notes": "Notes", "bodyweight": "Bodyweight"
     })
 
 except Exception as e:
@@ -269,7 +231,6 @@ except Exception as e:
     st.stop()
 
 # --- STRICT PRIVACY FILTER ---
-# "Rahil will log his own workout... without seeing mine"
 if "User" in df.columns:
     df = df[df["User"] == current_user]
 else:
@@ -283,86 +244,82 @@ if not df.empty:
     df["Sets"] = pd.to_numeric(df["Sets"], errors='coerce').fillna(0)
     df["Reps"] = pd.to_numeric(df["Reps"], errors='coerce').fillna(0)
     df["Bodyweight"] = pd.to_numeric(df["Bodyweight"],errors='coerce').fillna(0)
-    df["Volume_kg"] = df["Sets"] * df["Reps"] * df["Weight_kg"]
     
     st.subheader(f"🏆 {current_user}'s Workspace")
     best_lifts = df.groupby("Exercise")["Weight_kg"].max().reset_index().sort_values(by="Weight_kg", ascending=False)
     st.dataframe(best_lifts, hide_index=True, use_container_width=True)
 
-    # --- TABS FOR EVERYONE ---
-    # Now Rahil gets "Manage Data" too
-    tabs_list = ["➕ Log Workout", "📊 Progress", "📅 History", "📝 Logbook", "⚖️ Bodyweight", "🛠️ Manage Data"]
+    # --- TABS (Volume Removed) ---
+    tabs_list = ["➕ Log Workout", "📈 Strength", "📅 History", "📚 Logbook", "⚖️ Bodyweight", "🛠️ Manage Data"]
     all_tabs = st.tabs(tabs_list)
     
     tab1, tab2, tab3, tab4, tab5, tab6 = all_tabs[0], all_tabs[1], all_tabs[2], all_tabs[3], all_tabs[4], all_tabs[5]
 
-    with tab1:
+    with tab1: # Strength
         target_exercise = st.selectbox("Select Exercise:", df["Exercise"].unique())
         strength_data = df[df["Exercise"] == target_exercise]
         st.line_chart(strength_data.groupby("Display_Date")["Weight_kg"].max())
-    with tab2:
-        st.bar_chart(df.groupby("Display_Date")["Volume_kg"].sum())
-    with tab3:
-        # History Tab
-        st.dataframe(df.sort_values("Date", ascending=False), use_container_width=True, hide_index=True)
-    with tab4:
-        st.subheader("📚 Training Logbook (Notion Style)")
-        st.write("Your history grouped by training day.")
-
-        # 1. Create a "Day Name" column (e.g., "Tuesday", "Thursday")
-        df["Day_Name"] = df["Date"].dt.day_name()
         
-        # 2. Define your specific sorting order (Not just alphabetical)
-        # We want the week to start on Monday or Tuesday as per your schedule
+    with tab2: # History
+        st.dataframe(df.sort_values("Date", ascending=False), use_container_width=True, hide_index=True)
+        
+    with tab3: # Logbook (Notion Style)
+        st.subheader("📚 Training Logbook (Notion Style)")
+        st.caption("Click a day to see your history.")
+
+        df["Day_Name"] = df["Date"].dt.day_name()
         days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
         
-        # 3. Create an Expander (Folder) for every day of the week
         for day in days_order:
-            # Filter data for just this day
             day_data = df[df["Day_Name"] == day]
-            
-            # Only show the folder if there is actual data
             if not day_data.empty:
-                # Calculate total sets to show a quick summary stat
-                total_sets = day_data["Sets"].sum()
-                
-                # Create the Notion-style collapsible header
                 with st.expander(f"🗓️ {day} ({len(day_data)} logs)"):
-                    # Show the table for this day
-                    # We sort by Date descending so newest Tuesday is at top
                     st.dataframe(
                         day_data.sort_values("Date", ascending=False)[["Display_Date", "Exercise", "Weight_kg", "Sets", "Reps", "Notes"]], 
-                        use_container_width=True, 
-                        hide_index=True
+                        use_container_width=True, hide_index=True
                     )
-    with tab5: 
+    with tab4: # Bodyweight
         st.line_chart(df.groupby("Display_Date")["Bodyweight"].mean())
 
-    # --- THE PRIVATE DELETE TAB ---
-    with tab6:
-        st.subheader(f"🛠️ Manage {current_user}'s Data")
+    with tab5: # Manage Data (Add + Delete)
+        st.subheader("🛠️ Manage Exercises")
         
-        # Show ONLY current user's rows with ID
+        # 1. ADD NEW EXERCISE
+        with st.expander("➕ Add New Exercise to Library"):
+            with st.form("add_ex_form"):
+                new_ex_name = st.text_input("Name (e.g. King's Move)")
+                cat_options = ["Tuesday", "Thursday", "Saturday", "Upper Body", "Abs", "General"]
+                new_ex_cat = st.selectbox("Category", cat_options)
+                
+                if st.form_submit_button("Add"):
+                    engine = get_engine()
+                    with engine.connect() as conn:
+                        conn.execute(
+                            text("INSERT INTO exercise_library (name, category, username) VALUES (:n, :c, :u)"),
+                            {"n": new_ex_name, "c": new_ex_cat, "u": current_user}
+                        )
+                        conn.commit()
+                    st.success(f"Added {new_ex_name}!")
+                    time.sleep(1)
+                    st.rerun()
+
+        st.divider()
+        
+        # 2. DELETE WORKOUT LOGS
+        st.subheader(f"🗑️ Delete {current_user}'s Logs")
         manage_df = df.copy().sort_values("id", ascending=False)
-        st.dataframe(
-            manage_df[["id", "Date", "Exercise", "Weight_kg", "Bodyweight", "Notes"]], 
-            hide_index=True, 
-            use_container_width=True
-        )
+        st.dataframe(manage_df[["id", "Date", "Exercise", "Weight_kg", "Notes"]], hide_index=True, use_container_width=True)
         
-        st.warning("⚠️ Deleting is permanent!")
         col_del_1, col_del_2 = st.columns([1, 2])
         with col_del_1:
             row_to_delete = st.number_input("Enter ID to Delete", min_value=1, step=1)
         with col_del_2:
             st.write("##")
-            if st.button("🗑️ Delete My Entry"):
+            if st.button("🗑️ Delete Entry"):
                 try:
                     engine = get_engine()
                     with engine.connect() as conn:
-                        # SECURITY CHECK:
-                        # We add "AND username = :user" so Rahil CANNOT delete Kaisar's data
-                        # even if he guesses the ID number.
+                        # Secure Delete
                         query = text("DELETE FROM workouts WHERE id = :id AND username = :user")
                         result = conn.execute(query, {"id": row_to_delete, "user": current_user})
                         conn.commit()
@@ -372,8 +329,7 @@ if not df.empty:
                             time.sleep(1)
                             st.rerun()
                         else:
-                            st.error("❌ Could not delete. (Either ID doesn't exist, or it belongs to someone else!)")
-                        
+                            st.error("❌ Invalid ID or not your data.")
                 except Exception as e:
                     st.error(f"❌ Error: {e}")
 
