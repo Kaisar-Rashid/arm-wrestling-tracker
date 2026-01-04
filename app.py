@@ -4,7 +4,7 @@ import plotly.express as px
 from sqlalchemy import create_engine, text
 from datetime import date, datetime, timedelta
 import extra_streamlit_components as stx
-import os
+import numpy as np
 import time
 
 # --- PAGE CONFIG ---
@@ -54,7 +54,7 @@ def get_last_log(user, exercise_name):
     try:
         with engine.connect() as conn:
             query = text("""
-                SELECT date, weight, sets, reps, notes
+                SELECT date, weight, sets, reps, notes, rpe
                 FROM workouts
                 WHERE username = :user AND exercise = :ex
                 ORDER BY date DESC LIMIT 1
@@ -171,8 +171,7 @@ exercise = st.selectbox("Select Exercise to Log:", exercise_options)
 # 🔥 PROGRESSIVE OVERLOAD DISPLAY (Updates Instantly) 🔥
 last_log = get_last_log(current_user, exercise)
 if last_log:
-    last_date, last_weight, last_sets, last_reps, last_note = last_log
-    
+    last_date, last_weight, last_sets, last_reps, last_note, last_rpe = last_log      
     # Date formatting
     if isinstance(last_date, str):
         d_str = datetime.strptime(last_date, '%Y-%m-%d').strftime("%b %d")
@@ -183,6 +182,21 @@ if last_log:
     st.info(f"🔙 **Last time you did {exercise} ({d_str}):**\n\n {last_weight}kg × {last_reps} reps ({last_sets} sets)")
 else:
     st.info(f"🆕 No history found for **{exercise}**. Go crush it!")
+
+# --- 🧠 PRESCRIPTIVE ANALYTICS: RECOMMENDATION ENGINE ----
+if last_log:
+    last_date, last_weight, last_sets, last_reps, last_note, last_rpe = last_log
+    
+    recommendation = ""    
+    if last_rpe >= 9:
+        recommendation = "🛑 **High Intensity detected:** Keep weight the same. Focus on recovery."
+    elif last_rpe <= 7:
+        recommendation = "🚀 **Room for growth:** Try increasing weight by 2.5kg."
+    else:
+        recommendation = "✅ **Sweet Spot:** Maintain current weight and try to add 1 rep."
+        
+    st.info(f"🤖 **AI Coach says:** {recommendation}")
+
 
 # 2. THE LOGGING FORM (Inputs Only) 📝
 with st.form("workout_form", clear_on_submit=False): 
@@ -259,11 +273,70 @@ tabs_list = ["📈 Progress", "📅 History", "📚 Logbook", "⚖️ Bodyweight
 all_tabs = st.tabs(tabs_list)
 tab1, tab2, tab3, tab4, tab5 = all_tabs[0], all_tabs[1], all_tabs[2], all_tabs[3], all_tabs[4]
 
-with tab1: # Progress
+with tab1: # 📈 Progress & Analytics
     if not df.empty:
-        target_exercise = st.selectbox("Select Exercise:", df["Exercise"].unique())
-        strength_data = df[df["Exercise"] == target_exercise]
-        st.line_chart(strength_data.groupby("Display_Date")["Weight_kg"].max())
+        # --- 1. PRE-CALCULATE ANALYTICS ---
+        target_exercise = st.selectbox("Select Exercise for Analysis:", df["Exercise"].unique())
+        ex_data = df[df["Exercise"] == target_exercise].sort_values("Date")
+        
+        if len(ex_data) > 1:
+            # A. Prepare Data
+            ex_data['date_ordinal'] = ex_data['Date'].map(datetime.toordinal)
+            
+            # B. ML Prediction
+            slope, intercept = np.polyfit(ex_data['date_ordinal'], ex_data['Weight_kg'], 1)
+            monthly_gain = slope * 30 
+            
+            # C. Calculate e1RM
+            ex_data["Clean_Reps"] = ex_data["Reps"].astype(str).str.split(',').str[0]
+            ex_data["Clean_Reps"] = pd.to_numeric(ex_data["Clean_Reps"], errors='coerce').fillna(1)
+            ex_data["e1RM"] = ex_data["Weight_kg"] * (1 + (ex_data["Clean_Reps"] / 30))
+            current_e1rm = ex_data["e1RM"].iloc[-1] 
+
+            # --- 2. THE DASHBOARD ---
+            col_main, col_metrics = st.columns([3, 1])
+            
+            with col_main:
+                # Forecast
+                future_date = datetime.now() + timedelta(days=30)
+                future_val = (slope * future_date.toordinal()) + intercept
+                st.caption(f"🤖 **Forecast:** hitting **{future_val:.1f} kg** in 30 days.")
+                
+                # --- 📊 MAIN GRAPH (The "Sick" Scatter) ---
+                fig = px.scatter(
+                    ex_data, 
+                    x="Date", 
+                    y="Weight_kg", 
+                    size=ex_data["RPE"].replace(0, 1), 
+                    color="RPE", 
+                    color_continuous_scale="RdYlGn_r", 
+                    hover_data=["Sets", "Reps", "e1RM"], 
+                    title=f"Progress: {target_exercise}",
+                    trendline="ols" 
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            with col_metrics:
+                st.write("### ⚡ Stats")
+                
+                # Metric 1: Velocity
+                if monthly_gain > 0.5:
+                    st.metric("Growth Speed", f"+{monthly_gain:.1f} kg/mo", delta="Fast")
+                elif monthly_gain > 0:
+                    st.metric("Growth Speed", f"+{monthly_gain:.1f} kg/mo", delta="Steady")
+                else:
+                    st.metric("Growth Speed", f"{monthly_gain:.1f} kg/mo", delta="Stalled", delta_color="inverse")
+                
+                # Metric 2: Current Max
+                st.metric("Est. 1-Rep Max", f"{current_e1rm:.1f} kg")
+                
+                # --- 📉 NEW: MINI e1RM GRAPH ---
+                st.write("Theoretical Limit Trend:")
+                # We use a simple line chart here because it fits small spaces better
+                st.line_chart(ex_data.set_index("Date")["e1RM"], height=150, color="#FF4B4B")
+                
+        else:
+            st.warning("Log at least 2 workouts to unlock Analytics.")
     else:
         st.write("Start training to see your strength curve here!")
 
@@ -286,10 +359,51 @@ with tab3: # Logbook
                     st.dataframe(day_data.sort_values("Date", ascending=False)[["Display_Date", "Exercise", "Weight_kg", "Sets", "Reps", "Notes"]], use_container_width=True, hide_index=True)
     else:
         st.write("Your logs will be grouped by day here.")
-
-with tab4: # Bodyweight
+with tab4: # ⚖️ Bodyweight
     if not df.empty:
-        st.line_chart(df.groupby("Display_Date")["Bodyweight"].mean())
+        # --- 1. DATA TRANSFORMATION ---
+        # Create a dedicated dataframe for bodyweight to keep things clean
+        bw_df = df[["Date", "Bodyweight"]].sort_values("Date").dropna()
+        
+        # Create the derived column (The Math)
+        bw_df["Bodyweight_lbs"] = bw_df["Bodyweight"] * 2.20462
+        
+        # --- 2. USER CONTROL ---
+        col_controls, col_graph = st.columns([1, 4])
+        
+        with col_controls:
+            st.write("##") # Spacer
+            # The Toggle Switch
+            unit_choice = st.radio("Select Unit:", ["KG", "LBS"])
+        
+        # --- 3. THE VISUALIZATION ---
+        with col_graph:
+            # Logic: Choose which column to plot based on the radio button
+            y_col = "Bodyweight" if unit_choice == "KG" else "Bodyweight_lbs"
+            color_hex = "#1f77b4" if unit_choice == "KG" else "#ff7f0e" # Blue for KG, Orange for LBS
+            
+            fig_bw = px.line(
+                bw_df, 
+                x="Date", 
+                y=y_col, 
+                markers=True,
+                title=f"Bodyweight History ({unit_choice})",
+                height=350
+            )
+            
+            # Make it look "Sexy" (Minimalist style)
+            fig_bw.update_traces(line_color=color_hex, line_width=3)
+            fig_bw.update_layout(yaxis_title=unit_choice)
+            
+            st.plotly_chart(fig_bw, use_container_width=True)
+            
+        # Optional: Show the latest stat text
+        latest_bw = bw_df.iloc[-1]
+        st.metric(
+            label="Current Bodyweight", 
+            value=f"{latest_bw[y_col]:.1f} {unit_choice}"
+        )
+            
     else:
         st.write("Track your bodyweight to see it here.")
 
