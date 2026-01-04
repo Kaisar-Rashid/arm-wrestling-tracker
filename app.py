@@ -219,28 +219,31 @@ with st.form("workout_form", clear_on_submit=True):
 
 
 # --- SECTION 2: DASHBOARD ---
+# --- SECTION 2: DASHBOARD ---
 st.divider()
 
+# 1. LOAD DATA
 try:
     engine = get_engine()
     df = pd.read_sql("SELECT * FROM workouts", engine)
     
+    # Standardize Column Names
     df = df.rename(columns={
         "date": "Date", "exercise": "Exercise", "weight": "Weight_kg",
         "sets": "Sets", "reps": "Reps", "rpe": "RPE", "username": "User",
         "notes": "Notes", "bodyweight": "Bodyweight"
     })
-
 except Exception as e:
     st.error(f"❌ Error loading data: {e}")
     st.stop()
 
-# --- STRICT PRIVACY FILTER ---
+# 2. FILTER BY USER
 if "User" in df.columns:
     df = df[df["User"] == current_user]
 else:
     df = pd.DataFrame()
 
+# 3. PROCESS DATA (Only if it exists)
 if not df.empty:
     df["Category"] = df["Exercise"].map(CATEGORY_MAP).fillna("Other")
     df["Date"] = pd.to_datetime(df["Date"])
@@ -253,66 +256,77 @@ if not df.empty:
     st.subheader(f"🏆 {current_user}'s Workspace")
     best_lifts = df.groupby("Exercise")["Weight_kg"].max().reset_index().sort_values(by="Weight_kg", ascending=False)
     st.dataframe(best_lifts, hide_index=True, use_container_width=True)
+else:
+    st.info(f"👋 Welcome, {current_user}! You haven't logged any workouts yet. Go to 'Manage Data' to add exercises, then log your first set!")
 
-    # --- TABS CONFIGURATION (Removed "Log Workout") ---
-    tabs_list = ["📈 Progress", "📅 History", "📚 Logbook", "⚖️ Bodyweight", "🛠️ Manage Data"]
-    all_tabs = st.tabs(tabs_list)
-    
-    tab1, tab2, tab3, tab4, tab5 = all_tabs[0], all_tabs[1], all_tabs[2], all_tabs[3], all_tabs[4]
+# 4. CREATE TABS (Always show these, even if data is empty!)
+tabs_list = ["📈 Progress", "📅 History", "📚 Logbook", "⚖️ Bodyweight", "🛠️ Manage Data"]
+all_tabs = st.tabs(tabs_list)
+tab1, tab2, tab3, tab4, tab5 = all_tabs[0], all_tabs[1], all_tabs[2], all_tabs[3], all_tabs[4]
 
-    with tab1: # Progress
+# --- TAB CONTENT ---
+
+with tab1: # Progress
+    if not df.empty:
         target_exercise = st.selectbox("Select Exercise:", df["Exercise"].unique())
         strength_data = df[df["Exercise"] == target_exercise]
         st.line_chart(strength_data.groupby("Display_Date")["Weight_kg"].max())
-        
-    with tab2: # History
-        st.dataframe(df.sort_values("Date", ascending=False), use_container_width=True, hide_index=True)
-        
-    with tab3: # Logbook
-        st.subheader("📚 Training Logbook (Notion Style)")
-        st.caption("Click a day to see your history.")
+    else:
+        st.write("Start training to see your strength curve here!")
 
+with tab2: # History
+    if not df.empty:
+        st.dataframe(df.sort_values("Date", ascending=False), use_container_width=True, hide_index=True)
+    else:
+        st.write("No history yet.")
+
+with tab3: # Logbook
+    st.subheader("📚 Training Logbook")
+    if not df.empty:
+        st.caption("Click a day to see your history.")
         df["Day_Name"] = df["Date"].dt.day_name()
         days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        
         for day in days_order:
             day_data = df[df["Day_Name"] == day]
             if not day_data.empty:
                 with st.expander(f"🗓️ {day} ({len(day_data)} logs)"):
-                    st.dataframe(
-                        day_data.sort_values("Date", ascending=False)[["Display_Date", "Exercise", "Weight_kg", "Sets", "Reps", "Notes"]], 
-                        use_container_width=True, hide_index=True
-                    )
+                    st.dataframe(day_data.sort_values("Date", ascending=False)[["Display_Date", "Exercise", "Weight_kg", "Sets", "Reps", "Notes"]], use_container_width=True, hide_index=True)
+    else:
+        st.write("Your logs will be grouped by day here.")
 
-    with tab4: # Bodyweight
+with tab4: # Bodyweight
+    if not df.empty:
         st.line_chart(df.groupby("Display_Date")["Bodyweight"].mean())
+    else:
+        st.write("Track your bodyweight to see it here.")
 
-    with tab5: # Manage Data
-        st.subheader("🛠️ Manage Exercises")
-        
-        # ADD EXERCISE FORM
-        with st.expander("➕ Add New Exercise to Library"):
-            with st.form("add_ex_form"):
-                new_ex_name = st.text_input("Name (e.g. King's Move)")
-                cat_options = ["Tuesday", "Thursday", "Saturday", "Upper Body", "Abs", "General"]
-                new_ex_cat = st.selectbox("Category", cat_options)
-                
-                if st.form_submit_button("Add"):
-                    engine = get_engine()
-                    with engine.connect() as conn:
-                        conn.execute(
-                            text("INSERT INTO exercise_library (name, category, username) VALUES (:n, :c, :u)"),
-                            {"n": new_ex_name, "c": new_ex_cat, "u": current_user}
-                        )
-                        conn.commit()
-                    st.success(f"Added {new_ex_name}!")
-                    time.sleep(1)
-                    st.rerun()
+with tab5: # Manage Data (ALWAYS VISIBLE)
+    st.subheader("🛠️ Manage Exercises")
+    
+    # 1. ADD EXERCISE FORM
+    with st.expander("➕ Add New Exercise to Library"):
+        with st.form("add_ex_form"):
+            new_ex_name = st.text_input("Name (e.g. King's Move)")
+            cat_options = ["Tuesday", "Thursday", "Saturday", "Upper Body", "Abs", "General"]
+            new_ex_cat = st.selectbox("Category", cat_options)
+            
+            if st.form_submit_button("Add"):
+                engine = get_engine()
+                with engine.connect() as conn:
+                    conn.execute(
+                        text("INSERT INTO exercise_library (name, category, username) VALUES (:n, :c, :u)"),
+                        {"n": new_ex_name, "c": new_ex_cat, "u": current_user}
+                    )
+                    conn.commit()
+                st.success(f"Added {new_ex_name}!")
+                time.sleep(1)
+                st.rerun()
 
-        st.divider()
-        
-        # DELETE FORM
-        st.subheader(f"🗑️ Delete {current_user}'s Logs")
+    st.divider()
+    
+    # 2. DELETE FORM (Only if data exists)
+    st.subheader(f"🗑️ Delete {current_user}'s Logs")
+    if not df.empty:
         manage_df = df.copy().sort_values("id", ascending=False)
         st.dataframe(manage_df[["id", "Date", "Exercise", "Weight_kg", "Notes"]], hide_index=True, use_container_width=True)
         
@@ -328,15 +342,13 @@ if not df.empty:
                         query = text("DELETE FROM workouts WHERE id = :id AND username = :user")
                         result = conn.execute(query, {"id": row_to_delete, "user": current_user})
                         conn.commit()
-                        
                         if result.rowcount > 0:
                             st.success(f"✅ Deleted ID {row_to_delete}!")
                             time.sleep(1)
                             st.rerun()
                         else:
-                            st.error("❌ Invalid ID or not your data.")
+                            st.error("❌ Invalid ID.")
                 except Exception as e:
                     st.error(f"❌ Error: {e}")
-
-else:
-    st.info(f"Welcome {current_user}! Start logging above to see your workspace.")
+    else:
+        st.write("No logs to delete yet.")
