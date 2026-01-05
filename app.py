@@ -410,47 +410,116 @@ with tab4: # ⚖️ Bodyweight
 with tab5: # Manage Data
     st.subheader("🛠️ Manage Exercises")
     
+    # --- 1. ADD NEW EXERCISE TO LIBRARY ---
     with st.expander("➕ Add New Exercise to Library"):
         with st.form("add_ex_form"):
             new_ex_name = st.text_input("Name (e.g. King's Move)")
-            cat_options = ["Tuesday", "Thursday", "Saturday", "Upper Body", "Abs", "General", "Monday", "Wednesday", "Friday"]
+            
+            # --- 🔒 LOGIC: ONLY SHOW RELEVANT DAYS ---
+            if current_user == "Kaisar":
+                cat_options = ["Tuesday (Heavy/Vol)", "Thursday (Statics)", "Saturday (Table Power)", "Upper Body", "Abs", "General"]
+            elif current_user == "Rahil":
+                cat_options = ["Monday", "Wednesday", "Friday", "Saturday", "General"]
+            else:
+                cat_options = ["General", "Other"] # Fallback
+            
+            # The dropdown now adapts to YOU
             new_ex_cat = st.selectbox("Category", cat_options)
-            if st.form_submit_button("Add"):
-                engine = get_engine()
-                with engine.connect() as conn:
-                    conn.execute(
-                        text("INSERT INTO exercise_library (name, category, username) VALUES (:n, :c, :u)"),
-                        {"n": new_ex_name, "c": new_ex_cat, "u": current_user}
-                    )
-                    conn.commit()
-                st.success(f"Added {new_ex_name}!")
-                time.sleep(1)
-                st.rerun()
+            
+            if st.form_submit_button("Add Exercise"):
+                if new_ex_name:
+                    try:
+                        engine = get_engine()
+                        with engine.connect() as conn:
+                            # We explicitly save the username so Rahil never sees Kaisar's moves
+                            conn.execute(
+                                text("INSERT INTO exercise_library (name, category, username) VALUES (:n, :c, :u)"),
+                                {"n": new_ex_name, "c": new_ex_cat, "u": current_user}
+                            )
+                            conn.commit()
+                        st.success(f"✅ Added '{new_ex_name}' to {new_ex_cat}!")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error: {e}")
+                else:
+                    st.warning("Please enter a name.")
+
+    st.divider()
+
+    # --- 2. MANAGE YOUR LIBRARY (Delete Exercises) ---
+    st.subheader(f"📋 {current_user}'s Exercise Library")
+    
+    try:
+        engine = get_engine()
+        # Fetch only YOUR exercises
+        lib_df = pd.read_sql(text("SELECT * FROM exercise_library WHERE username = :u"), engine, params={"u": current_user})
+        
+        if not lib_df.empty:
+            st.dataframe(lib_df, use_container_width=True, hide_index=True)
+            
+            # Tool to remove mistakes from the library
+            col_del, col_btn = st.columns([3, 1])
+            with col_del:
+                ex_to_del = st.selectbox("Select Exercise to Delete from Library:", lib_df["name"].unique())
+            with col_btn:
+                st.write("##")
+                if st.button("🗑️ Remove"):
+                    with engine.connect() as conn:
+                        conn.execute(text("DELETE FROM exercise_library WHERE name = :n AND username = :u"), {"n": ex_to_del, "u": current_user})
+                        conn.commit()
+                    st.success("Deleted!")
+                    time.sleep(1)
+                    st.rerun()
+        else:
+            st.info("No exercises found in your library.")
+            
+    except Exception as e:
+        st.error(f"Could not load library: {e}")
+
     st.divider()
     
-    st.subheader(f"🗑️ Delete {current_user}'s Logs")
+    # --- 3. DELETE WORKOUT LOGS (Smart Dropdown) ---
+    st.subheader(f"🗑️ Delete {current_user}'s Workout Logs")
+    
     if not df.empty:
-        manage_df = df.copy().sort_values("id", ascending=False)
-        st.dataframe(manage_df[["id", "Date", "Exercise", "Weight_kg", "Notes"]], hide_index=True, use_container_width=True)
-        col_del_1, col_del_2 = st.columns([1, 2])
-        with col_del_1:
-            row_to_delete = st.number_input("Enter ID to Delete", min_value=1, step=1)
-        with col_del_2:
-            st.write("##")
-            if st.button("🗑️ Delete Entry"):
-                try:
-                    engine = get_engine()
-                    with engine.connect() as conn:
-                        query = text("DELETE FROM workouts WHERE id = :id AND username = :user")
-                        result = conn.execute(query, {"id": row_to_delete, "user": current_user})
-                        conn.commit()
-                        if result.rowcount > 0:
-                            st.success(f"✅ Deleted ID {row_to_delete}!")
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error("❌ Invalid ID.")
-                except Exception as e:
-                    st.error(f"❌ Error: {e}")
+        # Create a "Human Readable" label for the dropdown
+        # Format: "Jan 05 | Pronation | 30kg | Notes..."
+        df["Delete_Label"] = (
+            df["Date"].astype(str) + " | " + 
+            df["Exercise"] + " | " + 
+            df["Weight_kg"].astype(str) + "kg | " +
+            df["Notes"].fillna("")
+        )
+        
+        # User picks the text, but we use the ID secretly
+        log_to_delete = st.selectbox("Select Entry to Delete:", df["Delete_Label"])
+        
+        if st.button("🗑️ Delete Selected Log"):
+            # Find the hidden ID that matches the label
+            real_id_to_delete = df.loc[df["Delete_Label"] == log_to_delete, "id"].values[0]
+            
+            try:
+                with engine.connect() as conn:
+                    # Execute delete using the hidden ID
+                    conn.execute(
+                        text("DELETE FROM workouts WHERE id = :id AND username = :u"), 
+                        {"id": int(real_id_to_delete), "u": current_user}
+                    )
+                    conn.commit()
+                st.success(f"Deleted log: {log_to_delete}")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+                
+        # Show recent history for reference
+        with st.expander("View Recent History Table"):
+            st.dataframe(
+                df[["Date", "Exercise", "Weight_kg", "Sets", "Reps", "Notes"]], 
+                hide_index=True, 
+                use_container_width=True
+            )
+
     else:
-        st.write("No logs to delete yet.")
+        st.info("No logs to delete.")
