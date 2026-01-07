@@ -261,10 +261,6 @@ if not df.empty:
     df["Sets"] = pd.to_numeric(df["Sets"], errors='coerce').fillna(0)
     # NOTE: We do NOT force Reps to numeric anymore, so "5,4,3" is allowed.
     df["Bodyweight"] = pd.to_numeric(df["Bodyweight"],errors='coerce').fillna(0)
-    
-    st.subheader(f"🏆 {current_user}'s Workspace")
-    best_lifts = df.groupby("Exercise")["Weight_kg"].max().reset_index().sort_values(by="Weight_kg", ascending=False)
-    st.dataframe(best_lifts, hide_index=True, use_container_width=True)
 else:
     st.info(f"👋 Welcome, {current_user}! You haven't logged any workouts yet.")
 
